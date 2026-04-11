@@ -45,20 +45,34 @@ def mark_writing_response(self, response_id):
         data = json.loads(result.content[0].text.replace('```json', '').replace('```', '').strip())
 
         scores = data.get('scores', {})
-        response.score_content = scores.get('content')
-        response.score_communicative = scores.get('communicative')
-        response.score_organisation = scores.get('organisation')
-        response.score_language = scores.get('language')
-        response.total = data.get('total')
-        response.band = data.get('band', '')
-        response.cefr = data.get('cefr', '')
-        response.strengths = data.get('strengths', '')
-        response.improvements = data.get('improvements', '')
-        response.suggestion = data.get('suggestion', '')
-        response.zero_reason = data.get('zero_reason', '')
-        response.mark_status = 'done'
-        response.marked_at = timezone.now()
-        response.save()
+        with transaction.atomic():
+            response = WritingResponse.objects.select_for_update().select_related('attempt__user').get(id=response_id)
+            user = response.attempt.user.__class__.objects.select_for_update().get(id=response.attempt.user_id)
+
+            if not response.credits_charged:
+                if user.ai_credits < 1:
+                    response.mark_status = 'failed'
+                    response.zero_reason = 'Insufficient AI credits to finalize writing marking.'
+                    response.save(update_fields=['mark_status', 'zero_reason'])
+                    return
+                user.ai_credits -= 1
+                user.save(update_fields=['ai_credits'])
+                response.credits_charged = True
+
+            response.score_content = scores.get('content')
+            response.score_communicative = scores.get('communicative')
+            response.score_organisation = scores.get('organisation')
+            response.score_language = scores.get('language')
+            response.total = data.get('total')
+            response.band = data.get('band', '')
+            response.cefr = data.get('cefr', '')
+            response.strengths = data.get('strengths', '')
+            response.improvements = data.get('improvements', '')
+            response.suggestion = data.get('suggestion', '')
+            response.zero_reason = data.get('zero_reason', '')
+            response.mark_status = 'done'
+            response.marked_at = timezone.now()
+            response.save()
 
     except Exception as exc:
         if self.request.retries >= self.max_retries:
@@ -67,7 +81,7 @@ def mark_writing_response(self, response_id):
                     response = WritingResponse.objects.select_for_update().select_related('attempt__user').get(id=response_id)
                     update_fields = ['mark_status']
                     response.mark_status = 'failed'
-                    if not response.credits_refunded:
+                    if response.credits_charged and not response.credits_refunded:
                         refund_ai_credit(response.attempt.user_id, 1)
                         response.credits_refunded = True
                         update_fields.append('credits_refunded')

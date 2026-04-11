@@ -64,6 +64,7 @@ class WritingResponse(models.Model):
     improvements = models.TextField(blank=True, default='')
     suggestion = models.TextField(blank=True, default='')
     zero_reason = models.TextField(blank=True, default='')
+    credits_charged = models.BooleanField(default=False)
     credits_refunded = models.BooleanField(default=False)
     submitted_at = models.DateTimeField(auto_now_add=True)
     marked_at = models.DateTimeField(null=True, blank=True)

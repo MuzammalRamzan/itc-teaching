@@ -99,39 +99,64 @@ def submit_writing(request, attempt_id):
     if not valid_items:
         return Response({'error': 'No valid writing responses found.'}, status=status.HTTP_400_BAD_REQUEST)
 
-    required_credits = len(valid_items)
     if request.user.plan == request.user.PLAN_BASIC:
         return feature_error('AI marking is available on Promo Trial and AI Practice only.', code='ai_marking_locked')
     if request.user.plan == request.user.PLAN_FREE:
         return feature_error('Please purchase a plan to use writing.', code='plan_required')
-    if request.user.ai_credits < required_credits:
-        return feature_error(f'You need {required_credits} AI credits for this submission.', code='insufficient_credits', http_status=status.HTTP_402_PAYMENT_REQUIRED)
-
     created_ids = []
-    remaining_credits = request.user.ai_credits
-    with transaction.atomic():
-        user = request.user.__class__.objects.select_for_update().get(pk=request.user.pk)
-        if user.ai_credits < required_credits:
-            return feature_error(f'You need {required_credits} AI credits for this submission.', code='insufficient_credits', http_status=status.HTTP_402_PAYMENT_REQUIRED)
-        user.ai_credits -= required_credits
-        user.save(update_fields=['ai_credits'])
-        remaining_credits = user.ai_credits
+    queued_ids = []
+    reused_existing = False
 
+    with transaction.atomic():
+        attempt = ExamAttempt.objects.select_for_update().get(pk=attempt.pk)
+        user = request.user.__class__.objects.select_for_update().get(pk=request.user.pk)
+
+        new_items = []
         for question, text in valid_items:
+            existing = WritingResponse.objects.filter(
+                attempt=attempt,
+                question=question,
+            ).order_by('-submitted_at').first()
+
+            if existing and existing.text.strip() == text and existing.mark_status in (
+                WritingResponse.STATUS_PENDING,
+                WritingResponse.STATUS_MARKING,
+                WritingResponse.STATUS_DONE,
+            ):
+                created_ids.append(str(existing.id))
+                reused_existing = True
+                continue
+
+            new_items.append((question, text))
+
+        required_credits = len(new_items)
+        if user.ai_credits < required_credits:
+            return feature_error(
+                f'You need {required_credits} AI credits for this submission.',
+                code='insufficient_credits',
+                http_status=status.HTTP_402_PAYMENT_REQUIRED,
+            )
+
+        for question, text in new_items:
             response = WritingResponse.objects.create(
                 attempt=attempt,
                 question=question,
                 text=text,
             )
-            created_ids.append(str(response.id))
-            mark_writing_response.delay(str(response.id))
+            response_id = str(response.id)
+            created_ids.append(response_id)
+            queued_ids.append(response_id)
+
+    for response_id in queued_ids:
+        mark_writing_response.delay(response_id)
 
     return Response({
         'status': 'marking',
         'writing_response_ids': created_ids,
-        'credits_used': required_credits,
-        'remaining_credits': remaining_credits,
-        'message': 'Marking in progress. Poll GET /api/attempts/{id}/ for results.',
+        'credits_used': 0,
+        'remaining_credits': request.user.ai_credits,
+        'message': 'Marking in progress. AI credits will be charged only after the report is successfully generated.',
+        'reused_existing': reused_existing,
     }, status=status.HTTP_202_ACCEPTED)
 
 
