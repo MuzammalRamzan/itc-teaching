@@ -262,6 +262,20 @@ def speaking_chat(request, attempt_id):
         system += '\n'
     system += f'\nBegin by warmly greeting the student, explain there are {parts.count()} parts, then start Part 1.'
 
+    if not settings.ANTHROPIC_API_KEY:
+        if charged_now:
+            with transaction.atomic():
+                attempt = ExamAttempt.objects.select_for_update().get(pk=attempt.pk)
+                user = request.user.__class__.objects.select_for_update().get(pk=request.user.pk)
+                user.ai_credits += 1
+                user.save(update_fields=['ai_credits'])
+                attempt.speaking_chat_credit_charged = False
+                attempt.save(update_fields=['speaking_chat_credit_charged'])
+        return Response(
+            {'error': 'Anthropic API key is not configured on the backend.'},
+            status=status.HTTP_503_SERVICE_UNAVAILABLE,
+        )
+
     try:
         client = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
         result = client.messages.create(

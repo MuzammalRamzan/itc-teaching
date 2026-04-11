@@ -32,6 +32,9 @@ def mark_writing_response(self, response_id):
             prompt += f'Opener:"{q.story_opener}"'
         prompt += f'\n~{q.word_count or 100} words\n\nSTUDENT:\n{response.text}'
 
+        if not settings.ANTHROPIC_API_KEY:
+            raise RuntimeError('Anthropic API key is not configured on the backend.')
+
         client = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
         result = client.messages.create(
             model='claude-sonnet-4-20250514',
@@ -100,6 +103,9 @@ def mark_speaking_response(self, response_id):
 
         messages = list(response.transcript)
         messages.append({'role': 'user', 'content': settings.SPEAK_MARK_PROMPT})
+
+        if not settings.ANTHROPIC_API_KEY:
+            raise RuntimeError('Anthropic API key is not configured on the backend.')
 
         client = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
         result = client.messages.create(
