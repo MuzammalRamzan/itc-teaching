@@ -96,18 +96,19 @@ CORS_ALLOWED_ORIGINS = config(
     'CORS_ALLOWED_ORIGINS',
     default='http://localhost:3000,http://127.0.0.1:3000'
 ).split(',')
+CORS_ALLOWED_ORIGINS = [origin.strip() for origin in CORS_ALLOWED_ORIGINS if origin.strip()]
 CORS_ALLOW_CREDENTIALS = True
 
 # Google OAuth
-GOOGLE_CLIENT_ID = config('GOOGLE_CLIENT_ID', default='')
-FRONTEND_BASE_URL = config('FRONTEND_BASE_URL', default='http://localhost:3000')
-STRIPE_SECRET_KEY = config('STRIPE_SECRET_KEY', default='')
-STRIPE_WEBHOOK_SECRET = config('STRIPE_WEBHOOK_SECRET', default='')
+GOOGLE_CLIENT_ID = config('GOOGLE_CLIENT_ID', default='').strip()
+FRONTEND_BASE_URL = config('FRONTEND_BASE_URL', default='http://localhost:3000').strip()
+STRIPE_SECRET_KEY = config('STRIPE_SECRET_KEY', default='').strip()
+STRIPE_WEBHOOK_SECRET = config('STRIPE_WEBHOOK_SECRET', default='').strip()
 PROMO_TRIAL_ACTIVE = config('PROMO_TRIAL_ACTIVE', default=True, cast=bool)
-PROMO_TRIAL_ENDS_AT = config('PROMO_TRIAL_ENDS_AT', default='')
+PROMO_TRIAL_ENDS_AT = config('PROMO_TRIAL_ENDS_AT', default='').strip()
 
 # Anthropic
-ANTHROPIC_API_KEY = config('ANTHROPIC_API_KEY', default='')
+ANTHROPIC_API_KEY = config('ANTHROPIC_API_KEY', default='').strip()
 
 # AI Prompts
 B1W_SYSTEM_PROMPT = """You are a Cambridge B1 Preliminary Writing examiner at ITC Riyadh. OFFICIAL rubric:
@@ -140,6 +141,10 @@ CELERY_RESULT_BACKEND = config('CELERY_RESULT_BACKEND', default='redis://localho
 CELERY_ACCEPT_CONTENT = ['json']
 CELERY_TASK_SERIALIZER = 'json'
 CELERY_RESULT_SERIALIZER = 'json'
+if CELERY_BROKER_URL.startswith('rediss://'):
+    CELERY_BROKER_USE_SSL = {'ssl_cert_reqs': 'CERT_NONE'}
+if CELERY_RESULT_BACKEND.startswith('rediss://'):
+    CELERY_REDIS_BACKEND_USE_SSL = {'ssl_cert_reqs': 'CERT_NONE'}
 
 LANGUAGE_CODE = 'en-us'
 TIME_ZONE = 'Asia/Riyadh'
