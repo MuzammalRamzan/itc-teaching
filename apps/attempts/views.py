@@ -257,7 +257,6 @@ def speaking_chat(request, attempt_id):
     messages = request.data.get('messages', [])
     if not messages:
         return Response({'error': 'No messages'}, status=status.HTTP_400_BAD_REQUEST)
-    one_part_mode = bool(request.data.get('one_part_mode'))
 
     charged_now = False
     with transaction.atomic():
@@ -273,9 +272,6 @@ def speaking_chat(request, attempt_id):
             charged_now = True
 
     parts = SpeakingPart.objects.filter(exam=attempt.exam).order_by('order', 'part')
-    if one_part_mode:
-        first_part = parts.first()
-        parts = [first_part] if first_part else []
     system = settings.SPEAKING_EXAMINER_PROMPT + '\n\nSPEAKING TEST STRUCTURE:\n\n'
     for p in parts:
         system += f'=== {p.label} ===\nInstructions: {p.instruction}\n'
@@ -289,10 +285,7 @@ def speaking_chat(request, attempt_id):
             system += f'Central question: "{p.central_question}"\n'
             system += f'Options: {" / ".join(p.options)}\n'
         system += '\n'
-    part_count = len(parts) if isinstance(parts, list) else parts.count()
-    system += f'\nBegin by warmly greeting the student, explain there are {part_count} parts, then start Part 1.'
-    if one_part_mode:
-        system += '\nTEST MODE: Only complete Part 1, then end with this EXACT phrase: "Thank you, that concludes our speaking test. Well done!"'
+    system += f'\nBegin by warmly greeting the student, explain there are {parts.count()} parts, then start Part 1.'
 
     if not settings.ANTHROPIC_API_KEY:
         if charged_now:
