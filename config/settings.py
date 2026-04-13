@@ -121,10 +121,24 @@ ZERO: EMAIL/ARTICLE=irrelevant->0 ALL. STORY=no link to opener->0. CEFR: 3+->B1+
 JSON only (no markdown): {"scores":{"content":N,"communicative":N,"organisation":N,"language":N},"total":N,"band":"X","cefr":"X","strengths":"...","improvements":"...","suggestion":"...","zero_reason":""}
 band: A=18-20,B=15-17,C=12-14,D=10-11,U=0-9."""
 
-SPEAK_MARK_PROMPT = """The speaking test is now complete. Give your formal examiner assessment as JSON only (no markdown, no other text):
+SPEAK_MARK_PROMPT = """The speaking test is now complete. Review the full transcript and give a fair, realistic B1-style examiner assessment as JSON only (no markdown, no extra text).
+Return exactly:
 {"scores":{"grammar":N,"discourse":N,"interaction":N},"total":N,"band":"X","cefr":"X","strengths":"...","improvements":"...","suggestion":"..."}
-GRAMMAR & VOCABULARY (0-5): range and accuracy. DISCOURSE (0-5): develops ideas, speaks at length. INTERACTIVE COMMUNICATION (0-5): engages, responds appropriately.
-band: A=13-15,B=10-12,C=7-9,D=5-6,U=0-4. cefr: total>=10->"B1 or above", else "A2"."""
+
+Scoring rubric:
+- GRAMMAR & VOCABULARY (0-5): range, accuracy, word choice, control of simple vs attempted complex language
+- DISCOURSE (0-5): develops ideas, gives reasons/examples, coherence, length of answers
+- INTERACTIVE COMMUNICATION (0-5): responds directly, stays on topic, handles follow-up questions naturally
+
+Important rules:
+- Be strict but fair for Saudi B1 learners preparing for an admission-style test
+- Do not give top scores for short, repetitive, or error-heavy answers
+- If the student gives very brief answers, weak development, or limited vocabulary, lower discourse/grammar accordingly
+- strengths, improvements, and suggestion must be specific, practical, and based on what the student actually said
+- Keep each feedback field concise but useful, ideally 1-2 sentences
+
+band: A=13-15,B=10-12,C=7-9,D=5-6,U=0-4
+cefr: total>=10->"B1 or above", else "A2"."""
 
 SPEAKING_EXAMINER_PROMPT = """You are a friendly, encouraging and professional English examiner at ITC (International Aviation Technical College at Riyadh) conducting a B1 speaking test.
 
