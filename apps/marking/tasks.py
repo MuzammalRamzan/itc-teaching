@@ -49,7 +49,7 @@ def mark_writing_response(self, response_id):
             response = WritingResponse.objects.select_for_update().select_related('attempt__user').get(id=response_id)
             user = response.attempt.user.__class__.objects.select_for_update().get(id=response.attempt.user_id)
 
-            if not response.credits_charged:
+            if not response.credits_charged and not response.attempt.bypass_ai_credits:
                 if user.ai_credits < 1:
                     response.mark_status = 'failed'
                     response.zero_reason = 'Insufficient AI credits to finalize writing marking.'

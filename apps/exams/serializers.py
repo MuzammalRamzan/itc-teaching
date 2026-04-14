@@ -40,7 +40,7 @@ class ExamListSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Exam
-        fields = ['id', 'title', 'description', 'time_mins', 'created_at', 'question_count']
+        fields = ['id', 'title', 'description', 'time_mins', 'exam_family', 'created_at', 'question_count']
 
     def get_question_count(self, obj):
         return obj.questions.count()
@@ -53,14 +53,14 @@ class ExamDetailSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Exam
-        fields = ['id', 'title', 'description', 'time_mins', 'created_at',
+        fields = ['id', 'title', 'description', 'time_mins', 'exam_family', 'created_at',
                   'questions', 'speaking_parts', 'reading_parts']
 
 
 class ExamCreateSerializer(serializers.ModelSerializer):
     class Meta:
         model = Exam
-        fields = ['title', 'description', 'time_mins']
+        fields = ['title', 'description', 'time_mins', 'exam_family']
 
     def create(self, validated_data):
         user = self.context['request'].user

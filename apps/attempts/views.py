@@ -52,10 +52,13 @@ def create_attempt(request):
         if existing_attempt:
             return Response(AttemptSerializer(existing_attempt).data, status=status.HTTP_200_OK)
 
+    bypass_ai_credits = request.headers.get('X-ITC-App') == 'frontendFET'
+
     attempt = ExamAttempt.objects.create(
         user=request.user,
         exam=exam,
         mode=mode,
+        bypass_ai_credits=bypass_ai_credits,
     )
     return Response(AttemptSerializer(attempt).data, status=status.HTTP_201_CREATED)
 
@@ -99,7 +102,7 @@ def submit_writing(request, attempt_id):
     if not valid_items:
         return Response({'error': 'No valid writing responses found.'}, status=status.HTTP_400_BAD_REQUEST)
 
-    if request.user.plan == request.user.PLAN_BASIC:
+    if request.user.plan == request.user.PLAN_BASIC and not attempt.bypass_ai_credits:
         return feature_error('AI marking is available on Promo Trial and AI Practice only.', code='ai_marking_locked')
     if request.user.plan == request.user.PLAN_FREE:
         return feature_error('Please purchase a plan to use writing.', code='plan_required')
@@ -129,7 +132,7 @@ def submit_writing(request, attempt_id):
 
             new_items.append((question, text))
 
-        required_credits = len(new_items)
+        required_credits = 0 if attempt.bypass_ai_credits else len(new_items)
         if user.ai_credits < required_credits:
             return feature_error(
                 f'You need {required_credits} AI credits for this submission.',
@@ -336,3 +339,19 @@ def my_attempts(request):
         status=ExamAttempt.STATUS_COMPLETE
     ).select_related('exam')[:20]
     return Response(AttemptSerializer(attempts, many=True).data)
+
+
+@api_view(['GET'])
+def my_fet_attempts(request):
+    attempts = (
+        ExamAttempt.objects.filter(
+            user=request.user,
+            exam__exam_family=Exam.FAMILY_FET,
+            writing_responses__isnull=False,
+        )
+        .select_related('exam')
+        .prefetch_related('writing_responses__question')
+        .distinct()
+        .order_by('-started_at')[:12]
+    )
+    return Response(AttemptDetailSerializer(attempts, many=True).data)

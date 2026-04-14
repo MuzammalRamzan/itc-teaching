@@ -10,4 +10,5 @@ urlpatterns = [
     path('attempts/<uuid:attempt_id>/reading/', views.submit_reading, name='submit-reading'),
     path('attempts/<uuid:attempt_id>/complete/', views.complete_attempt, name='complete-attempt'),
     path('users/me/attempts/', views.my_attempts, name='my-attempts'),
+    path('users/me/fet-attempts/', views.my_fet_attempts, name='my-fet-attempts'),
 ]

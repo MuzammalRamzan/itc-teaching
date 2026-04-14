@@ -24,6 +24,7 @@ class ExamAttempt(models.Model):
     mode = models.CharField(max_length=20, choices=MODE_CHOICES, default=MODE_PRACTICE)
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=STATUS_IN_PROGRESS)
     speaking_chat_credit_charged = models.BooleanField(default=False)
+    bypass_ai_credits = models.BooleanField(default=False)
     started_at = models.DateTimeField(auto_now_add=True)
     completed_at = models.DateTimeField(null=True, blank=True)
 

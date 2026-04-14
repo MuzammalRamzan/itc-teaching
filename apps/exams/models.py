@@ -4,10 +4,18 @@ from apps.authentication.models import User
 
 
 class Exam(models.Model):
+    FAMILY_GENERAL = 'general'
+    FAMILY_FET = 'fet'
+    FAMILY_CHOICES = [
+        (FAMILY_GENERAL, 'General'),
+        (FAMILY_FET, 'FET'),
+    ]
+
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     title = models.CharField(max_length=300)
     description = models.TextField(blank=True, default='')
     time_mins = models.IntegerField(default=45)
+    exam_family = models.CharField(max_length=20, choices=FAMILY_CHOICES, default=FAMILY_GENERAL)
     created_by = models.ForeignKey(User, on_delete=models.PROTECT, related_name='created_exams')
     created_at = models.DateTimeField(auto_now_add=True)
     is_active = models.BooleanField(default=True)
