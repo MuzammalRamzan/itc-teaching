@@ -15,7 +15,7 @@ def refund_ai_credit(user_id, amount):
     user.save(update_fields=['ai_credits'])
 
 
-FET_TASK1_SYSTEM_PROMPT = """You are marking FET Writing Task 1 using ONLY this rubric.
+FET_TASK1_SYSTEM_PROMPT = """You are marking Writing Task 1 using ONLY this rubric.
 
 TASK 1 TOTAL = 10 MARKS.
 
@@ -44,7 +44,7 @@ STRICT RULES:
 """
 
 
-FET_TASK2_SYSTEM_PROMPT = """You are marking FET Writing Task 2 using ONLY this rubric.
+FET_TASK2_SYSTEM_PROMPT = """You are marking Writing Task 2 using ONLY this rubric.
 
 TASK 2 TOTAL = 20 MARKS.
 
@@ -124,6 +124,44 @@ def _fet_zero_result(question, reason):
 def _normalise_writing_result(response, data):
     scores = data.get('scores', {}) or {}
 
+    if getattr(response.question, 'part', None) == 1:
+        score_content = _clamp_score(scores.get('content_communicative'))
+        score_language = _clamp_score(scores.get('language_organisation'))
+        total = score_content + score_language
+        return {
+            'score_content': score_content,
+            'score_communicative': None,
+            'score_organisation': None,
+            'score_language': score_language,
+            'total': total,
+            'band': '',
+            'cefr': '',
+            'strengths': (data.get('strengths') or '').strip(),
+            'improvements': (data.get('improvements') or '').strip(),
+            'suggestion': (data.get('suggestion') or '').strip(),
+            'zero_reason': (data.get('zero_reason') or '').strip(),
+        }
+
+    if getattr(response.question, 'part', None) == 2:
+        score_content = _clamp_score(scores.get('content_communicative'))
+        score_communicative = _clamp_score(scores.get('organisation'))
+        score_organisation = _clamp_score(scores.get('vocabulary'))
+        score_language = _clamp_score(scores.get('grammar'))
+        total = score_content + score_communicative + score_organisation + score_language
+        return {
+            'score_content': score_content,
+            'score_communicative': score_communicative,
+            'score_organisation': score_organisation,
+            'score_language': score_language,
+            'total': total,
+            'band': '',
+            'cefr': '',
+            'strengths': (data.get('strengths') or '').strip(),
+            'improvements': (data.get('improvements') or '').strip(),
+            'suggestion': (data.get('suggestion') or '').strip(),
+            'zero_reason': (data.get('zero_reason') or '').strip(),
+        }
+
     if getattr(response.attempt.exam, 'exam_family', '') == 'fet':
         if response.question.part == 1:
             score_content = _clamp_score(scores.get('content_communicative'))
@@ -186,7 +224,7 @@ def mark_writing_response(self, response_id):
         response.save(update_fields=['mark_status'])
 
         q = response.question
-        is_fet = getattr(response.attempt.exam, 'exam_family', '') == 'fet'
+        use_rubric_prompt = getattr(q, 'part', None) in {1, 2}
         prompt = f'TASK:{q.question_type}\n'
         if q.question_type == 'email':
             prompt += f'Notes:{",".join(q.notes or [])}'
@@ -199,17 +237,17 @@ def mark_writing_response(self, response_id):
         if not settings.ANTHROPIC_API_KEY:
             raise RuntimeError('Anthropic API key is not configured on the backend.')
 
-        if is_fet and _too_little_language(q, response.text):
+        if use_rubric_prompt and _too_little_language(q, response.text):
             data = _fet_zero_result(
                 q,
-                'Too little relevant language was provided to assess this task under the FET rubric.',
+                'Too little relevant language was provided to assess this task under the rubric.',
             )
         else:
             client = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
             result = client.messages.create(
                 model='claude-sonnet-4-20250514',
                 max_tokens=1000,
-                system=FET_TASK1_SYSTEM_PROMPT if is_fet and q.part == 1 else FET_TASK2_SYSTEM_PROMPT if is_fet else settings.B1W_SYSTEM_PROMPT,
+                system=FET_TASK1_SYSTEM_PROMPT if use_rubric_prompt and q.part == 1 else FET_TASK2_SYSTEM_PROMPT if use_rubric_prompt and q.part == 2 else settings.B1W_SYSTEM_PROMPT,
                 messages=[{'role': 'user', 'content': prompt}]
             )
             data = json.loads(result.content[0].text.replace('```json', '').replace('```', '').strip())
@@ -217,17 +255,6 @@ def mark_writing_response(self, response_id):
         normalised = _normalise_writing_result(response, data)
         with transaction.atomic():
             response = WritingResponse.objects.select_for_update().select_related('attempt__user').get(id=response_id)
-            user = response.attempt.user.__class__.objects.select_for_update().get(id=response.attempt.user_id)
-
-            if not response.credits_charged and not response.attempt.bypass_ai_credits:
-                if user.ai_credits < 1:
-                    response.mark_status = 'failed'
-                    response.zero_reason = 'Insufficient AI credits to finalize writing marking.'
-                    response.save(update_fields=['mark_status', 'zero_reason'])
-                    return
-                user.ai_credits -= 1
-                user.save(update_fields=['ai_credits'])
-                response.credits_charged = True
 
             response.score_content = normalised['score_content']
             response.score_communicative = normalised['score_communicative']
@@ -251,11 +278,26 @@ def mark_writing_response(self, response_id):
                     response = WritingResponse.objects.select_for_update().select_related('attempt__user').get(id=response_id)
                     update_fields = ['mark_status']
                     response.mark_status = 'failed'
-                    if response.credits_charged and not response.credits_refunded:
-                        refund_ai_credit(response.attempt.user_id, 1)
-                        response.credits_refunded = True
-                        update_fields.append('credits_refunded')
                     response.save(update_fields=update_fields)
+
+                    if response.submission_group_id and not response.attempt.bypass_ai_credits:
+                        group_responses = list(
+                            WritingResponse.objects.select_for_update().filter(
+                                attempt=response.attempt,
+                                submission_group_id=response.submission_group_id,
+                            )
+                        )
+                        charged_response = next(
+                            (
+                                item for item in group_responses
+                                if item.credits_charged and not item.credits_refunded
+                            ),
+                            None,
+                        )
+                        if charged_response and all(item.mark_status == WritingResponse.STATUS_FAILED for item in group_responses):
+                            refund_ai_credit(response.attempt.user_id, 1)
+                            charged_response.credits_refunded = True
+                            charged_response.save(update_fields=['credits_refunded'])
             except Exception:
                 pass
             raise exc

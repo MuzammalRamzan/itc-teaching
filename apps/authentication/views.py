@@ -443,8 +443,8 @@ def create_checkout_session(request):
         session = stripe.checkout.Session.create(
             mode='payment',
             customer_email=request.user.email,
-            success_url=f"{settings.FRONTEND_BASE_URL}/platform?checkout=success&session_id={{CHECKOUT_SESSION_ID}}",
-            cancel_url=f"{settings.FRONTEND_BASE_URL}/pricing?checkout=cancelled",
+            success_url=f"{settings.CHECKOUT_FRONTEND_BASE_URL}/platform?checkout=success&session_id={{CHECKOUT_SESSION_ID}}",
+            cancel_url=f"{settings.CHECKOUT_FRONTEND_BASE_URL}/pricing?checkout=cancelled",
             metadata={
                 'record_id': str(record.id),
                 'user_id': str(request.user.id),

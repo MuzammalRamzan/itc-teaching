@@ -124,12 +124,62 @@ def _import_fet_exam_payload(payload, user, exam=None):
     return exam
 
 
+def _import_general_writing_payload(payload, user, exam=None):
+    if not isinstance(payload, dict):
+        raise ValueError('The uploaded JSON must be an object.')
+
+    title = (payload.get('title') or '').strip()
+    if not title:
+        raise ValueError('Exam title is required.')
+
+    description = payload.get('description', '') or ''
+    time_mins = int(payload.get('time_mins') or 45)
+    writing = payload.get('writing') or {}
+    if not isinstance(writing, dict):
+        raise ValueError('`writing` must be an object.')
+
+    writing_rows = []
+    part1 = writing.get('part1')
+    if part1:
+        writing_rows.append(_normalize_writing_question(part1, 1, 1))
+    for index, item in enumerate(_validate_list('writing.part2', writing.get('part2', [])), start=2):
+        writing_rows.append(_normalize_writing_question(item, 2, index))
+
+    if not writing_rows:
+        raise ValueError('At least one writing question is required.')
+
+    with transaction.atomic():
+        if exam is None:
+            exam = Exam.objects.create(
+                title=title,
+                description=description,
+                time_mins=time_mins,
+                exam_family=Exam.FAMILY_GENERAL,
+                created_by=user,
+            )
+            for part_num in range(1, 7):
+                ReadingPart.objects.create(exam=exam, part_number=part_num)
+        else:
+            exam.title = title
+            exam.description = description
+            exam.time_mins = time_mins
+            exam.exam_family = Exam.FAMILY_GENERAL
+            exam.is_active = True
+            exam.save(update_fields=['title', 'description', 'time_mins', 'exam_family', 'is_active'])
+
+        WritingQuestion.objects.filter(exam=exam).delete()
+        for row in writing_rows:
+            WritingQuestion.objects.create(exam=exam, **row)
+
+    return exam
+
+
 # ── Exam CRUD ──
 
 @api_view(['GET', 'POST'])
 def exam_list(request):
     if request.method == 'GET':
-        exams = Exam.objects.filter(is_active=True)
+        exams = Exam.objects.filter(is_active=True).order_by('-created_at')
         family = (request.query_params.get('family') or '').strip().lower()
         if family in {Exam.FAMILY_GENERAL, Exam.FAMILY_FET}:
             exams = exams.filter(exam_family=family)
@@ -285,6 +335,29 @@ def import_fet_exam(request):
     payload = request.data.get('payload', request.data)
     try:
         saved_exam = _import_fet_exam_payload(payload, request.user, exam=exam)
+    except ValueError as exc:
+        return Response({'error': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+
+    return Response(ExamDetailSerializer(saved_exam).data, status=status.HTTP_201_CREATED if exam is None else status.HTTP_200_OK)
+
+
+@api_view(['POST'])
+@parser_classes([JSONParser])
+def import_general_writing_exam(request):
+    if not _admin_only(request):
+        return Response({'error': 'Admin only'}, status=status.HTTP_403_FORBIDDEN)
+
+    exam_id = request.data.get('exam_id')
+    exam = None
+    if exam_id:
+        try:
+            exam = Exam.objects.get(id=exam_id)
+        except Exam.DoesNotExist:
+            return Response({'error': 'Exam not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+    payload = request.data.get('payload', request.data)
+    try:
+        saved_exam = _import_general_writing_payload(payload, request.user, exam=exam)
     except ValueError as exc:
         return Response({'error': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
 

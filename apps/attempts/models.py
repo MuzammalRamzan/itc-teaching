@@ -51,6 +51,7 @@ class WritingResponse(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     attempt = models.ForeignKey(ExamAttempt, on_delete=models.CASCADE, related_name='writing_responses')
     question = models.ForeignKey(WritingQuestion, on_delete=models.PROTECT)
+    submission_group_id = models.UUIDField(null=True, blank=True, db_index=True)
     text = models.TextField()
     mark_status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=STATUS_PENDING)
     # Scores

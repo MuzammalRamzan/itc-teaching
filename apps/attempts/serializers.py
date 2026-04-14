@@ -25,7 +25,7 @@ def _combine_feedback(responses, attr):
     return ' '.join(items)
 
 
-def _build_fet_overall_feedback(task_breakdown, responses):
+def _build_overall_writing_feedback(task_breakdown, responses):
     total = sum(item['total'] for item in task_breakdown)
     max_total = sum(item['max_total'] for item in task_breakdown) or 1
     ratio = total / max_total
@@ -66,11 +66,38 @@ def _build_fet_overall_feedback(task_breakdown, responses):
     }
 
 
+def _build_task_details(responses):
+    task_details = []
+    for response in sorted(
+        responses,
+        key=lambda item: (
+            getattr(getattr(item, 'question', None), 'part', 99),
+            getattr(getattr(item, 'question', None), 'order', 99),
+        ),
+    ):
+        task_details.append({
+            'id': str(response.id),
+            'label': getattr(response.question, 'label', 'Question'),
+            'part': getattr(response.question, 'part', None),
+            'question_type': getattr(response.question, 'question_type', ''),
+            'total': int(response.total or 0),
+            'max_total': _max_total_for_response(response),
+            'scores': response.scores,
+            'strengths': response.strengths,
+            'improvements': response.improvements,
+            'suggestion': response.suggestion,
+            'zero_reason': response.zero_reason,
+            'mark_status': response.mark_status,
+        })
+    return task_details
+
+
 class WritingResponseSerializer(serializers.ModelSerializer):
     scores = serializers.ReadOnlyField()
     question_label = serializers.CharField(source='question.label', read_only=True)
     question_part = serializers.IntegerField(source='question.part', read_only=True)
     question_order = serializers.IntegerField(source='question.order', read_only=True)
+    question_type = serializers.CharField(source='question.question_type', read_only=True)
     max_total = serializers.SerializerMethodField()
 
     def get_max_total(self, obj):
@@ -78,7 +105,7 @@ class WritingResponseSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = WritingResponse
-        fields = ['id', 'question_label', 'question_part', 'question_order', 'text', 'mark_status', 'scores', 'max_total',
+        fields = ['id', 'question_label', 'question_part', 'question_order', 'question_type', 'text', 'mark_status', 'scores', 'max_total',
                   'total', 'band', 'cefr', 'strengths', 'improvements',
                   'suggestion', 'zero_reason', 'submitted_at', 'marked_at']
 
@@ -112,12 +139,10 @@ class AttemptDetailSerializer(serializers.ModelSerializer):
     writing_responses = WritingResponseSerializer(many=True, read_only=True)
     speaking_responses = SpeakingResponseSerializer(many=True, read_only=True)
     reading_responses = ReadingResponseSerializer(many=True, read_only=True)
+    writing_report = serializers.SerializerMethodField()
     fet_writing_report = serializers.SerializerMethodField()
 
-    def get_fet_writing_report(self, attempt):
-        if getattr(attempt.exam, 'exam_family', '') != 'fet':
-            return None
-
+    def _build_combined_writing_report(self, attempt):
         responses = list(attempt.writing_responses.select_related('question').all())
         if not responses:
             return None
@@ -125,7 +150,7 @@ class AttemptDetailSerializer(serializers.ModelSerializer):
         if any(response.mark_status in (WritingResponse.STATUS_PENDING, WritingResponse.STATUS_MARKING) for response in responses):
             return {
                 'id': str(attempt.id),
-                'question_label': 'FET Writing Test',
+                'question_label': 'FET Writing Test' if getattr(attempt.exam, 'exam_family', '') == 'fet' else 'Writing Test',
                 'question_labels': [getattr(response.question, 'label', 'Question') for response in responses],
                 'question_count': len(responses),
                 'mark_status': 'marking',
@@ -134,7 +159,7 @@ class AttemptDetailSerializer(serializers.ModelSerializer):
         if any(response.mark_status == WritingResponse.STATUS_FAILED for response in responses):
             return {
                 'id': str(attempt.id),
-                'question_label': 'FET Writing Test',
+                'question_label': 'FET Writing Test' if getattr(attempt.exam, 'exam_family', '') == 'fet' else 'Writing Test',
                 'question_labels': [getattr(response.question, 'label', 'Question') for response in responses],
                 'question_count': len(responses),
                 'mark_status': 'failed',
@@ -153,14 +178,14 @@ class AttemptDetailSerializer(serializers.ModelSerializer):
         task_breakdown = []
         if part1_question or part1_response:
             task_breakdown.append({
-                'label': getattr(part1_response.question, 'label', None) or getattr(part1_question, 'label', 'Question 1'),
+                'label': getattr(getattr(part1_response, 'question', None), 'label', None) or getattr(part1_question, 'label', 'Question 1'),
                 'total': int(part1_response.total or 0) if part1_response else 0,
                 'max_total': 10,
                 'status': 'done' if part1_response else 'not_answered',
             })
         if part2_question or part2_response:
             task_breakdown.append({
-                'label': getattr(part2_response.question, 'label', None) or getattr(part2_question, 'label', 'Question 2'),
+                'label': getattr(getattr(part2_response, 'question', None), 'label', None) or getattr(part2_question, 'label', 'Question 2'),
                 'total': int(part2_response.total or 0) if part2_response else 0,
                 'max_total': 20,
                 'status': 'done' if part2_response else 'not_answered',
@@ -168,11 +193,11 @@ class AttemptDetailSerializer(serializers.ModelSerializer):
 
         total = sum(item['total'] for item in task_breakdown)
         max_total = sum(item['max_total'] for item in task_breakdown)
-        feedback = _build_fet_overall_feedback(task_breakdown, done_responses)
+        feedback = _build_overall_writing_feedback(task_breakdown, done_responses)
 
         return {
             'id': str(attempt.id),
-            'question_label': 'FET Writing Test',
+            'question_label': 'FET Writing Test' if getattr(attempt.exam, 'exam_family', '') == 'fet' else 'Writing Test',
             'question_labels': [getattr(response.question, 'label', 'Question') for response in done_responses],
             'question_count': len(done_responses),
             'mark_status': 'done',
@@ -181,14 +206,23 @@ class AttemptDetailSerializer(serializers.ModelSerializer):
             'band': '',
             'cefr': '',
             'task_breakdown': task_breakdown,
+            'task_details': _build_task_details(done_responses),
             'strengths': feedback['strengths'],
             'improvements': feedback['improvements'],
             'suggestion': feedback['suggestion'],
             'zero_reason': feedback['zero_reason'],
         }
 
+    def get_writing_report(self, attempt):
+        return self._build_combined_writing_report(attempt)
+
+    def get_fet_writing_report(self, attempt):
+        if getattr(attempt.exam, 'exam_family', '') != 'fet':
+            return None
+        return self._build_combined_writing_report(attempt)
+
     class Meta:
         model = ExamAttempt
         fields = ['id', 'exam_id', 'exam_title', 'mode', 'status',
                   'started_at', 'completed_at',
-                  'writing_responses', 'speaking_responses', 'reading_responses', 'fet_writing_report']
+                  'writing_responses', 'speaking_responses', 'reading_responses', 'writing_report', 'fet_writing_report']

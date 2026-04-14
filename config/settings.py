@@ -107,6 +107,19 @@ CORS_ALLOW_HEADERS = list(default_headers) + [
 # Google OAuth
 GOOGLE_CLIENT_ID = config('GOOGLE_CLIENT_ID', default='').strip()
 FRONTEND_BASE_URL = config('FRONTEND_BASE_URL', default='http://localhost:3000').strip()
+PAYMENT_FRONTEND_BASE_URL = config('PAYMENT_FRONTEND_BASE_URL', default='').strip()
+
+
+def _resolve_checkout_frontend_base_url():
+    preferred = PAYMENT_FRONTEND_BASE_URL or FRONTEND_BASE_URL
+    candidates = [item.strip().rstrip('/') for item in preferred.split(',') if item.strip()]
+    for candidate in candidates:
+        if candidate.startswith('http://') or candidate.startswith('https://'):
+            return candidate
+    return 'http://localhost:3000'
+
+
+CHECKOUT_FRONTEND_BASE_URL = _resolve_checkout_frontend_base_url()
 STRIPE_SECRET_KEY = config('STRIPE_SECRET_KEY', default='').strip()
 STRIPE_WEBHOOK_SECRET = config('STRIPE_WEBHOOK_SECRET', default='').strip()
 PROMO_TRIAL_ACTIVE = config('PROMO_TRIAL_ACTIVE', default=True, cast=bool)

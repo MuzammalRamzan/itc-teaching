@@ -15,4 +15,5 @@ urlpatterns = [
     path('exams/<uuid:exam_id>/reading/<int:part_number>/', views.update_reading_part, name='update-reading'),
     # FET admin import
     path('exams/fet-import/', views.import_fet_exam, name='import-fet-exam'),
+    path('exams/general-writing-import/', views.import_general_writing_exam, name='import-general-writing-exam'),
 ]

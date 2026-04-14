@@ -1,4 +1,7 @@
+import uuid
+
 from django.db import transaction
+from django.db.models import Q
 from django.utils import timezone
 from rest_framework import status
 from rest_framework.decorators import api_view
@@ -109,6 +112,8 @@ def submit_writing(request, attempt_id):
     created_ids = []
     queued_ids = []
     reused_existing = False
+    charged_now = False
+    remaining_credits = request.user.ai_credits
 
     with transaction.atomic():
         attempt = ExamAttempt.objects.select_for_update().get(pk=attempt.pk)
@@ -132,7 +137,7 @@ def submit_writing(request, attempt_id):
 
             new_items.append((question, text))
 
-        required_credits = 0 if attempt.bypass_ai_credits else len(new_items)
+        required_credits = 0 if attempt.bypass_ai_credits or not new_items else 1
         if user.ai_credits < required_credits:
             return feature_error(
                 f'You need {required_credits} AI credits for this submission.',
@@ -140,11 +145,20 @@ def submit_writing(request, attempt_id):
                 http_status=status.HTTP_402_PAYMENT_REQUIRED,
             )
 
-        for question, text in new_items:
+        submission_group_id = uuid.uuid4() if new_items else None
+        if required_credits:
+            user.ai_credits -= required_credits
+            user.save(update_fields=['ai_credits'])
+            charged_now = True
+            remaining_credits = user.ai_credits
+
+        for index, (question, text) in enumerate(new_items):
             response = WritingResponse.objects.create(
                 attempt=attempt,
                 question=question,
                 text=text,
+                submission_group_id=submission_group_id,
+                credits_charged=bool(required_credits and index == 0),
             )
             response_id = str(response.id)
             created_ids.append(response_id)
@@ -156,9 +170,9 @@ def submit_writing(request, attempt_id):
     return Response({
         'status': 'marking',
         'writing_response_ids': created_ids,
-        'credits_used': 0,
-        'remaining_credits': request.user.ai_credits,
-        'message': 'Marking in progress. AI credits will be charged only after the report is successfully generated.',
+        'credits_used': 1 if charged_now else 0,
+        'remaining_credits': remaining_credits,
+        'message': 'Marking in progress. 1 AI credit has been used for this writing submission.' if charged_now else 'Marking in progress.',
         'reused_existing': reused_existing,
     }, status=status.HTTP_202_ACCEPTED)
 
@@ -334,10 +348,18 @@ def speaking_chat(request, attempt_id):
 
 @api_view(['GET'])
 def my_attempts(request):
-    attempts = ExamAttempt.objects.filter(
-        user=request.user,
-        status=ExamAttempt.STATUS_COMPLETE
-    ).select_related('exam')[:20]
+    attempts = (
+        ExamAttempt.objects.filter(user=request.user)
+        .filter(
+            Q(status=ExamAttempt.STATUS_COMPLETE)
+            | Q(writing_responses__isnull=False)
+            | Q(speaking_responses__isnull=False)
+            | Q(reading_responses__isnull=False)
+        )
+        .select_related('exam')
+        .distinct()
+        .order_by('-started_at')[:20]
+    )
     return Response(AttemptSerializer(attempts, many=True).data)
 
 
