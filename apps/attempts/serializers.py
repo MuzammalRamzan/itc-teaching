@@ -2,83 +2,68 @@ from rest_framework import serializers
 from .models import ExamAttempt, WritingResponse, SpeakingResponse, ReadingResponse
 
 
-def _band_from_total(total):
-    if total >= 18:
-        return 'A'
-    if total >= 15:
-        return 'B'
-    if total >= 12:
-        return 'C'
-    if total >= 10:
-        return 'D'
-    return 'U'
+def _max_total_for_question(question):
+    return 10 if getattr(question, 'part', None) == 1 else 20
 
 
-def _build_overall_strengths(score_content, score_communicative, score_organisation, score_language):
-    parts = []
-
-    if score_content >= 4:
-        parts.append('You address the task requirements well across the whole test and support your ideas with relevant detail.')
-    elif score_content >= 3:
-        parts.append('You generally cover the task requirements and include enough supporting detail to communicate your main ideas.')
-
-    if score_communicative >= 4:
-        parts.append('Your tone is appropriate for the tasks and your message remains clear and engaging for the reader.')
-    elif score_communicative >= 3:
-        parts.append('Your writing is generally easy to follow and communicates your purpose clearly in most parts of the test.')
-
-    if score_organisation >= 4:
-        parts.append('Your ideas are organised logically, with clear progression from one point to the next.')
-    elif score_organisation >= 3:
-        parts.append('Your writing has a clear overall structure and is mostly organised in a sensible way.')
-
-    if score_language >= 4:
-        parts.append('You show good control of vocabulary and grammar, with a range that supports the tasks well.')
-    elif score_language >= 3:
-        parts.append('Your language is generally accurate and appropriate, and it usually supports clear communication.')
-
-    if not parts:
-        parts.append('You communicate the main ideas across the test and show a clear attempt to respond to the tasks.')
-
-    return ' '.join(parts[:3])
+def _max_total_for_response(response):
+    return _max_total_for_question(getattr(response, 'question', None))
 
 
-def _build_overall_improvements(score_content, score_communicative, score_organisation, score_language):
-    parts = []
-
-    if score_content < 4:
-        parts.append('Develop key points a little more fully and make sure every task point is covered with enough specific detail.')
-    if score_communicative < 4:
-        parts.append('Keep the reader and purpose in mind more consistently so the tone stays strong across the full test.')
-    if score_organisation < 4:
-        parts.append('Use clearer linking words and smoother paragraph progression to improve the overall flow of ideas.')
-    if score_language < 4:
-        parts.append('Show more variety in vocabulary and sentence structure while checking grammar carefully for accuracy.')
-
-    if not parts:
-        parts.append('To push this result even higher, aim for even more precise vocabulary and more flexible sentence patterns throughout the test.')
-
-    return ' '.join(parts[:3])
+def _clean_feedback(text):
+    return ' '.join((text or '').split())
 
 
-def _build_overall_tip(score_content, score_communicative, score_organisation, score_language):
-    lowest_area = min(
-        [
-            ('content', score_content),
-            ('communicative', score_communicative),
-            ('organisation', score_organisation),
-            ('language', score_language),
-        ],
-        key=lambda item: item[1],
-    )[0]
+def _combine_feedback(responses, attr):
+    seen = set()
+    items = []
+    for response in responses:
+        value = _clean_feedback(getattr(response, attr, ''))
+        if value and value not in seen:
+            seen.add(value)
+            items.append(value)
+    return ' '.join(items)
 
-    tips = {
-        'content': 'Before writing, quickly note the required points for each task so you can check that every point has been answered clearly.',
-        'communicative': 'Before finishing, reread your answer and ask whether the tone, purpose, and message would feel clear to the intended reader.',
-        'organisation': 'Plan a simple structure before writing, then use connectors such as "first", "also", "however", and "finally" to guide the reader.',
-        'language': 'After drafting, revise a few sentences deliberately to improve vocabulary range and add more variety in sentence patterns.',
+
+def _build_fet_overall_feedback(task_breakdown, responses):
+    total = sum(item['total'] for item in task_breakdown)
+    max_total = sum(item['max_total'] for item in task_breakdown) or 1
+    ratio = total / max_total
+    missing_task = any(item['status'] != 'done' for item in task_breakdown)
+    zero_reasons = [_clean_feedback(response.zero_reason) for response in responses if _clean_feedback(response.zero_reason)]
+
+    if zero_reasons:
+        zero_reason = ' '.join(dict.fromkeys(zero_reasons))
+    elif missing_task:
+        zero_reason = 'One writing task was not completed, so the overall score is reduced.'
+    else:
+        zero_reason = ''
+
+    strengths = _combine_feedback(responses, 'strengths')
+    improvements = _combine_feedback(responses, 'improvements')
+    suggestion = _combine_feedback(responses, 'suggestion')
+
+    if ratio <= 0.2:
+        strengths = ''
+        improvements = 'Too little successful language was produced across the test to achieve a strong result. More relevant content, fuller development, and clearer organisation are needed.'
+        suggestion = 'Complete both tasks and make sure each required point is answered with enough language to be assessed securely.'
+    else:
+        if missing_task:
+            extra = ' Complete both writing tasks to access the full score range.'
+            improvements = f'{improvements}{extra}'.strip() if improvements else 'Complete both writing tasks to access the full score range.'
+        if not strengths and ratio >= 0.4:
+            strengths = 'Some relevant content is communicated, but performance is still inconsistent across the full writing test.'
+        if not improvements:
+            improvements = 'Develop the ideas more fully and make the organisation, vocabulary, and grammar more consistent across the whole test.'
+        if not suggestion:
+            suggestion = 'Before time ends, check that every task point has been addressed and that each answer is long enough to be assessed properly.'
+
+    return {
+        'strengths': strengths,
+        'improvements': improvements,
+        'suggestion': suggestion,
+        'zero_reason': zero_reason,
     }
-    return tips[lowest_area]
 
 
 class WritingResponseSerializer(serializers.ModelSerializer):
@@ -86,10 +71,14 @@ class WritingResponseSerializer(serializers.ModelSerializer):
     question_label = serializers.CharField(source='question.label', read_only=True)
     question_part = serializers.IntegerField(source='question.part', read_only=True)
     question_order = serializers.IntegerField(source='question.order', read_only=True)
+    max_total = serializers.SerializerMethodField()
+
+    def get_max_total(self, obj):
+        return _max_total_for_response(obj)
 
     class Meta:
         model = WritingResponse
-        fields = ['id', 'question_label', 'question_part', 'question_order', 'text', 'mark_status', 'scores',
+        fields = ['id', 'question_label', 'question_part', 'question_order', 'text', 'mark_status', 'scores', 'max_total',
                   'total', 'band', 'cefr', 'strengths', 'improvements',
                   'suggestion', 'zero_reason', 'submitted_at', 'marked_at']
 
@@ -156,12 +145,30 @@ class AttemptDetailSerializer(serializers.ModelSerializer):
         if not done_responses:
             return None
 
-        score_content = round(sum((response.score_content or 0) for response in done_responses) / len(done_responses))
-        score_communicative = round(sum((response.score_communicative or 0) for response in done_responses) / len(done_responses))
-        score_organisation = round(sum((response.score_organisation or 0) for response in done_responses) / len(done_responses))
-        score_language = round(sum((response.score_language or 0) for response in done_responses) / len(done_responses))
-        total = score_content + score_communicative + score_organisation + score_language
-        cefr = next((response.cefr for response in done_responses if response.cefr), '')
+        part1_response = next((response for response in done_responses if getattr(response.question, 'part', None) == 1), None)
+        part2_response = next((response for response in done_responses if getattr(response.question, 'part', None) == 2), None)
+        part1_question = next((question for question in attempt.exam.questions.all() if question.part == 1), None)
+        part2_question = next((question for question in attempt.exam.questions.all() if question.part == 2), None)
+
+        task_breakdown = []
+        if part1_question or part1_response:
+            task_breakdown.append({
+                'label': getattr(part1_response.question, 'label', None) or getattr(part1_question, 'label', 'Question 1'),
+                'total': int(part1_response.total or 0) if part1_response else 0,
+                'max_total': 10,
+                'status': 'done' if part1_response else 'not_answered',
+            })
+        if part2_question or part2_response:
+            task_breakdown.append({
+                'label': getattr(part2_response.question, 'label', None) or getattr(part2_question, 'label', 'Question 2'),
+                'total': int(part2_response.total or 0) if part2_response else 0,
+                'max_total': 20,
+                'status': 'done' if part2_response else 'not_answered',
+            })
+
+        total = sum(item['total'] for item in task_breakdown)
+        max_total = sum(item['max_total'] for item in task_breakdown)
+        feedback = _build_fet_overall_feedback(task_breakdown, done_responses)
 
         return {
             'id': str(attempt.id),
@@ -169,34 +176,15 @@ class AttemptDetailSerializer(serializers.ModelSerializer):
             'question_labels': [getattr(response.question, 'label', 'Question') for response in done_responses],
             'question_count': len(done_responses),
             'mark_status': 'done',
-            'scores': {
-                'content': score_content,
-                'communicative': score_communicative,
-                'organisation': score_organisation,
-                'language': score_language,
-            },
             'total': total,
-            'band': _band_from_total(total),
-            'cefr': cefr,
-            'strengths': _build_overall_strengths(
-                score_content,
-                score_communicative,
-                score_organisation,
-                score_language,
-            ),
-            'improvements': _build_overall_improvements(
-                score_content,
-                score_communicative,
-                score_organisation,
-                score_language,
-            ),
-            'suggestion': _build_overall_tip(
-                score_content,
-                score_communicative,
-                score_organisation,
-                score_language,
-            ),
-            'zero_reason': '',
+            'max_total': max_total,
+            'band': '',
+            'cefr': '',
+            'task_breakdown': task_breakdown,
+            'strengths': feedback['strengths'],
+            'improvements': feedback['improvements'],
+            'suggestion': feedback['suggestion'],
+            'zero_reason': feedback['zero_reason'],
         }
 
     class Meta:
