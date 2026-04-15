@@ -1,4 +1,5 @@
 from decimal import Decimal
+from urllib.parse import quote
 
 from django.conf import settings
 from django.db import transaction
@@ -260,6 +261,15 @@ def get_checkout_item_for_user(user, product_key):
     return None, 'Unknown product.'
 
 
+def sanitize_checkout_return_path(value):
+    if not isinstance(value, str):
+        return '/platform'
+    value = value.strip()
+    if not value.startswith('/') or value.startswith('//'):
+        return '/platform'
+    return value or '/platform'
+
+
 def apply_payment_record(record, session):
     if record.applied_at:
         return
@@ -397,6 +407,9 @@ def create_checkout_session(request):
     if error:
         return Response({'error': error}, status=status.HTTP_400_BAD_REQUEST)
 
+    return_to = sanitize_checkout_return_path(request.data.get('return_to', '/platform'))
+    encoded_return_to = quote(return_to, safe='')
+
     if not settings.STRIPE_SECRET_KEY:
         with transaction.atomic():
             record = PaymentRecord.objects.create(
@@ -421,6 +434,7 @@ def create_checkout_session(request):
             'status': 'completed',
             'record_id': str(record.id),
             'message': 'Mock checkout completed locally.',
+            'return_to': return_to,
         }, status=status.HTTP_201_CREATED)
 
     try:
@@ -443,8 +457,8 @@ def create_checkout_session(request):
         session = stripe.checkout.Session.create(
             mode='payment',
             customer_email=request.user.email,
-            success_url=f"{settings.CHECKOUT_FRONTEND_BASE_URL}/platform?checkout=success&session_id={{CHECKOUT_SESSION_ID}}",
-            cancel_url=f"{settings.CHECKOUT_FRONTEND_BASE_URL}/pricing?checkout=cancelled",
+            success_url=f"{settings.CHECKOUT_FRONTEND_BASE_URL}/platform?checkout=success&session_id={{CHECKOUT_SESSION_ID}}&return_to={encoded_return_to}",
+            cancel_url=f"{settings.CHECKOUT_FRONTEND_BASE_URL}/pricing?checkout=cancelled&return_to={encoded_return_to}",
             metadata={
                 'record_id': str(record.id),
                 'user_id': str(request.user.id),
