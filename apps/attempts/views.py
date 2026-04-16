@@ -107,8 +107,6 @@ def submit_writing(request, attempt_id):
 
     if request.user.plan == request.user.PLAN_BASIC and not attempt.bypass_ai_credits:
         return feature_error('AI marking is available on Promo Trial and AI Practice only.', code='ai_marking_locked')
-    if request.user.plan == request.user.PLAN_FREE:
-        return feature_error('Please purchase a plan to use writing.', code='plan_required')
     created_ids = []
     queued_ids = []
     reused_existing = False
