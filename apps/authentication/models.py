@@ -43,6 +43,7 @@ class User(AbstractBaseUser, PermissionsMixin):
     plan = models.CharField(max_length=20, choices=PLAN_CHOICES, default=PLAN_FREE)
     plan_purchased_at = models.DateTimeField(null=True, blank=True)
     ai_credits = models.IntegerField(default=0)
+    free_credits_claimed_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     last_login = models.DateTimeField(null=True, blank=True)
 
@@ -61,7 +62,7 @@ class User(AbstractBaseUser, PermissionsMixin):
         return self.plan in {self.PLAN_PROMO, self.PLAN_BASIC, self.PLAN_AI}
 
     def can_access_writing(self):
-        return self.plan in {self.PLAN_PROMO, self.PLAN_BASIC, self.PLAN_AI}
+        return self.plan in {self.PLAN_PROMO, self.PLAN_BASIC, self.PLAN_AI} or self.ai_credits > 0
 
     def can_access_speaking(self):
         return self.plan in {self.PLAN_PROMO, self.PLAN_AI} and self.ai_credits > 0
@@ -70,7 +71,7 @@ class User(AbstractBaseUser, PermissionsMixin):
         return self.plan in {self.PLAN_PROMO, self.PLAN_AI} and self.ai_credits > 0
 
     def can_use_ai_marking(self):
-        return self.plan in {self.PLAN_PROMO, self.PLAN_AI} and self.ai_credits > 0
+        return self.ai_credits > 0
 
     def can_buy_credits(self):
         return self.plan == self.PLAN_AI

@@ -1,5 +1,5 @@
 from decimal import Decimal
-from urllib.parse import quote
+from urllib.parse import quote, urlparse
 
 from django.conf import settings
 from django.db import transaction
@@ -50,6 +50,12 @@ PLAN_DETAILS = {
     },
 }
 
+FREE_CREDIT_DEFAULT = {
+    'code': 'FREE_CREDITS',
+    'included_credits': 5,
+    'is_active': True,
+}
+
 CREDIT_PACKS = {
     'credits_5': {
         'key': 'credits_5',
@@ -86,59 +92,11 @@ def get_tokens_for_user(user):
     }
 
 
-def get_plan_offer(plan):
-    offer = Promotion.objects.filter(plan=plan).order_by('-created_at').first()
-    now = timezone.now()
-
-    if offer:
-        active = offer.is_active
-        if offer.expires_at and offer.expires_at <= now:
-            active = False
-        return {
-            'plan': plan,
-            'code': offer.code,
-            'active': active,
-            'is_active': offer.is_active,
-            'price': Decimal(offer.price),
-            'included_credits': offer.included_credits,
-            'expires_at': offer.expires_at,
-            'source': 'database',
-            'id': offer.id,
-        }
-
-    if plan == User.PLAN_PROMO:
-        ends_at = parse_datetime(settings.PROMO_TRIAL_ENDS_AT) if settings.PROMO_TRIAL_ENDS_AT else None
-        active = settings.PROMO_TRIAL_ACTIVE and (not ends_at or now < ends_at)
-        return {
-            'plan': plan,
-            'code': 'PROMO_TRIAL',
-            'active': active,
-            'is_active': settings.PROMO_TRIAL_ACTIVE,
-            'price': Decimal('5.00'),
-            'included_credits': PLAN_DETAILS[plan]['credits'],
-            'expires_at': ends_at,
-            'source': 'settings',
-            'id': None,
-        }
-
-    item = PLAN_DETAILS[plan]
-    return {
-        'plan': plan,
-        'code': f'{plan.upper()}_PLAN',
-        'active': True,
-        'is_active': True,
-        'price': Decimal(item['price']),
-        'included_credits': item['credits'],
-        'expires_at': None,
-        'source': 'defaults',
-        'id': None,
-    }
-
-
 def serialize_plan_catalog(user=None):
     promo = get_plan_offer(User.PLAN_PROMO)
     basic = get_plan_offer(User.PLAN_BASIC)
     ai = get_plan_offer(User.PLAN_AI)
+    free_credit_offer = get_plan_offer(User.PLAN_FREE)
     ai_price = max(ai['price'] - basic['price'], Decimal('0.00')) if user and user.plan == User.PLAN_BASIC else ai['price']
     ai_name = 'Upgrade to AI Practice' if user and user.plan == User.PLAN_BASIC else PLAN_DETAILS[User.PLAN_AI]['name']
 
@@ -192,6 +150,12 @@ def serialize_plan_catalog(user=None):
     return {
         'plans': plans,
         'credit_packs': credit_packs,
+        'free_credit_offer': {
+            'code': free_credit_offer['code'],
+            'credits': free_credit_offer['included_credits'],
+            'active': free_credit_offer['active'],
+            'claimed': bool(user.free_credits_claimed_at) if user else False,
+        },
     }
 
 
@@ -207,6 +171,81 @@ def serialize_plan_offer_for_admin(plan):
         'active': offer['active'],
         'expires_at': offer['expires_at'].isoformat() if offer['expires_at'] else None,
         'source': offer['source'],
+    }
+
+
+def get_plan_offer(plan):
+    if plan == User.PLAN_FREE:
+        offer = Promotion.objects.filter(plan=plan).order_by('-created_at').first()
+        if offer:
+            return {
+                'plan': plan,
+                'code': offer.code,
+                'active': offer.is_active and offer.included_credits > 0,
+                'is_active': offer.is_active,
+                'price': Decimal('0.00'),
+                'included_credits': offer.included_credits,
+                'expires_at': None,
+                'source': 'database',
+                'id': offer.id,
+            }
+        return {
+            'plan': plan,
+            'code': FREE_CREDIT_DEFAULT['code'],
+            'active': FREE_CREDIT_DEFAULT['is_active'] and FREE_CREDIT_DEFAULT['included_credits'] > 0,
+            'is_active': FREE_CREDIT_DEFAULT['is_active'],
+            'price': Decimal('0.00'),
+            'included_credits': FREE_CREDIT_DEFAULT['included_credits'],
+            'expires_at': None,
+            'source': 'defaults',
+            'id': None,
+        }
+
+    offer = Promotion.objects.filter(plan=plan).order_by('-created_at').first()
+    now = timezone.now()
+
+    if offer:
+        active = offer.is_active
+        if offer.expires_at and offer.expires_at <= now:
+            active = False
+        return {
+            'plan': plan,
+            'code': offer.code,
+            'active': active,
+            'is_active': offer.is_active,
+            'price': Decimal(offer.price),
+            'included_credits': offer.included_credits,
+            'expires_at': offer.expires_at,
+            'source': 'database',
+            'id': offer.id,
+        }
+
+    if plan == User.PLAN_PROMO:
+        ends_at = parse_datetime(settings.PROMO_TRIAL_ENDS_AT) if settings.PROMO_TRIAL_ENDS_AT else None
+        active = settings.PROMO_TRIAL_ACTIVE and (not ends_at or now < ends_at)
+        return {
+            'plan': plan,
+            'code': 'PROMO_TRIAL',
+            'active': active,
+            'is_active': settings.PROMO_TRIAL_ACTIVE,
+            'price': Decimal('5.00'),
+            'included_credits': PLAN_DETAILS[plan]['credits'],
+            'expires_at': ends_at,
+            'source': 'settings',
+            'id': None,
+        }
+
+    item = PLAN_DETAILS[plan]
+    return {
+        'plan': plan,
+        'code': f'{plan.upper()}_PLAN',
+        'active': True,
+        'is_active': True,
+        'price': Decimal(item['price']),
+        'included_credits': item['credits'],
+        'expires_at': None,
+        'source': 'defaults',
+        'id': None,
     }
 
 
@@ -268,6 +307,18 @@ def sanitize_checkout_return_path(value):
     if not value.startswith('/') or value.startswith('//'):
         return '/platform'
     return value or '/platform'
+
+
+def sanitize_checkout_frontend_base_url(value):
+    if not isinstance(value, str):
+        return settings.CHECKOUT_FRONTEND_BASE_URL
+    value = value.strip().rstrip('/')
+    if not value:
+        return settings.CHECKOUT_FRONTEND_BASE_URL
+    parsed = urlparse(value)
+    if parsed.scheme not in {'http', 'https'} or not parsed.netloc or parsed.path not in {'', '/'}:
+        return settings.CHECKOUT_FRONTEND_BASE_URL
+    return f'{parsed.scheme}://{parsed.netloc}'
 
 
 def apply_payment_record(record, session):
@@ -356,6 +407,7 @@ def promotion_admin_detail(request):
     if request.method == 'GET':
         return Response({
             'packages': [
+                serialize_plan_offer_for_admin(User.PLAN_FREE),
                 serialize_plan_offer_for_admin(User.PLAN_PROMO),
                 serialize_plan_offer_for_admin(User.PLAN_BASIC),
                 serialize_plan_offer_for_admin(User.PLAN_AI),
@@ -372,7 +424,9 @@ def promotion_admin_detail(request):
             expires_at = timezone.make_aware(expires_at, timezone.get_current_timezone())
 
     plan = request.data.get('plan') or User.PLAN_PROMO
-    code = request.data.get('code') or (f'{plan.upper()}_PLAN' if plan != User.PLAN_PROMO else 'PROMO_TRIAL')
+    code = request.data.get('code') or (
+        'FREE_CREDITS' if plan == User.PLAN_FREE else f'{plan.upper()}_PLAN' if plan != User.PLAN_PROMO else 'PROMO_TRIAL'
+    )
 
     with transaction.atomic():
         promo, _ = Promotion.objects.select_for_update().get_or_create(
@@ -380,7 +434,7 @@ def promotion_admin_detail(request):
             defaults={
                 'code': code,
                 'plan': plan,
-                'price': request.data.get('price') or Decimal('5.00'),
+                'price': Decimal('0.00') if plan == User.PLAN_FREE else request.data.get('price') or Decimal('5.00'),
                 'included_credits': int(request.data.get('included_credits', 0) or 0),
                 'is_active': bool(request.data.get('is_active', True)),
                 'expires_at': expires_at,
@@ -388,7 +442,7 @@ def promotion_admin_detail(request):
         )
         promo.code = code
         promo.plan = plan
-        promo.price = request.data.get('price') or promo.price
+        promo.price = Decimal('0.00') if plan == User.PLAN_FREE else request.data.get('price') or promo.price
         promo.included_credits = int(request.data.get('included_credits', promo.included_credits) or 0)
         promo.is_active = bool(request.data.get('is_active', True))
         promo.expires_at = expires_at if plan == User.PLAN_PROMO else None
@@ -402,12 +456,47 @@ def promotion_admin_detail(request):
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
+def claim_free_credits(request):
+    offer = get_plan_offer(User.PLAN_FREE)
+    if not offer['active'] or offer['included_credits'] <= 0:
+        return Response({'error': 'Free credits are not available right now.'}, status=status.HTTP_400_BAD_REQUEST)
+
+    with transaction.atomic():
+        user = User.objects.select_for_update().get(pk=request.user.pk)
+        if user.free_credits_claimed_at:
+            return Response({'error': 'You have already claimed your free credits.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        now = timezone.now()
+        user.ai_credits += offer['included_credits']
+        user.free_credits_claimed_at = now
+        user.save(update_fields=['ai_credits', 'free_credits_claimed_at'])
+
+        PaymentRecord.objects.create(
+            user=user,
+            kind=PaymentRecord.KIND_CREDITS,
+            credits_amount=offer['included_credits'],
+            amount_sar=Decimal('0.00'),
+            status=PaymentRecord.STATUS_COMPLETED,
+            applied_at=now,
+            metadata={'product_key': 'free_credits_claim', 'mode': 'free_claim'},
+        )
+
+    return Response({
+        'message': f"You claimed {offer['included_credits']} free credits successfully.",
+        'user': UserSerializer(user).data,
+        'credits': offer['included_credits'],
+    })
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
 def create_checkout_session(request):
     item, error = get_checkout_item_for_user(request.user, request.data.get('product_key', '').strip())
     if error:
         return Response({'error': error}, status=status.HTTP_400_BAD_REQUEST)
 
     return_to = sanitize_checkout_return_path(request.data.get('return_to', '/platform'))
+    frontend_base_url = sanitize_checkout_frontend_base_url(request.data.get('frontend_base_url', ''))
     encoded_return_to = quote(return_to, safe='')
 
     if not settings.STRIPE_SECRET_KEY:
@@ -457,8 +546,8 @@ def create_checkout_session(request):
         session = stripe.checkout.Session.create(
             mode='payment',
             customer_email=request.user.email,
-            success_url=f"{settings.CHECKOUT_FRONTEND_BASE_URL}/platform?checkout=success&session_id={{CHECKOUT_SESSION_ID}}&return_to={encoded_return_to}",
-            cancel_url=f"{settings.CHECKOUT_FRONTEND_BASE_URL}/pricing?checkout=cancelled&return_to={encoded_return_to}",
+            success_url=f"{frontend_base_url}/pricing?checkout=success&session_id={{CHECKOUT_SESSION_ID}}&return_to={encoded_return_to}",
+            cancel_url=f"{frontend_base_url}/pricing?checkout=cancelled&return_to={encoded_return_to}",
             metadata={
                 'record_id': str(record.id),
                 'user_id': str(request.user.id),
