@@ -18,6 +18,29 @@ def _admin_only(request):
     return bool(request.user and request.user.is_authenticated and request.user.is_admin)
 
 
+def _parse_bool(value):
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in {'1', 'true', 'yes', 'on'}
+    return bool(value)
+
+
+def _exam_queryset_for_request(request):
+    queryset = Exam.objects.filter(is_deleted=False).order_by('-created_at')
+    include_inactive = _parse_bool(request.query_params.get('include_inactive')) if hasattr(request, 'query_params') else False
+    if not (_admin_only(request) and include_inactive):
+        queryset = queryset.filter(is_active=True)
+    return queryset
+
+
+def _sync_exam_activation(exam):
+    if exam.is_active and not exam.is_complete_for_activation:
+        exam.is_active = False
+        exam.save(update_fields=['is_active'])
+    return exam
+
+
 def _validate_list(name, value):
     if value in (None, ''):
         return []
@@ -97,6 +120,7 @@ def _import_fet_exam_payload(payload, user, exam=None):
                 time_mins=time_mins,
                 exam_family=Exam.FAMILY_FET,
                 created_by=user,
+                is_active=False,
             )
             for part_num in range(1, 7):
                 ReadingPart.objects.create(exam=exam, part_number=part_num)
@@ -105,8 +129,7 @@ def _import_fet_exam_payload(payload, user, exam=None):
             exam.description = description
             exam.time_mins = time_mins
             exam.exam_family = Exam.FAMILY_FET
-            exam.is_active = True
-            exam.save(update_fields=['title', 'description', 'time_mins', 'exam_family', 'is_active'])
+            exam.save(update_fields=['title', 'description', 'time_mins', 'exam_family'])
 
         WritingQuestion.objects.filter(exam=exam).delete()
         SpeakingPart.objects.filter(exam=exam).delete()
@@ -121,7 +144,7 @@ def _import_fet_exam_payload(payload, user, exam=None):
             part.has_content = bool(content)
             part.save(update_fields=['content', 'has_content'])
 
-    return exam
+    return _sync_exam_activation(exam)
 
 
 def _import_general_writing_payload(payload, user, exam=None):
@@ -156,6 +179,7 @@ def _import_general_writing_payload(payload, user, exam=None):
                 time_mins=time_mins,
                 exam_family=Exam.FAMILY_GENERAL,
                 created_by=user,
+                is_active=False,
             )
             for part_num in range(1, 7):
                 ReadingPart.objects.create(exam=exam, part_number=part_num)
@@ -164,14 +188,13 @@ def _import_general_writing_payload(payload, user, exam=None):
             exam.description = description
             exam.time_mins = time_mins
             exam.exam_family = Exam.FAMILY_GENERAL
-            exam.is_active = True
-            exam.save(update_fields=['title', 'description', 'time_mins', 'exam_family', 'is_active'])
+            exam.save(update_fields=['title', 'description', 'time_mins', 'exam_family'])
 
         WritingQuestion.objects.filter(exam=exam).delete()
         for row in writing_rows:
             WritingQuestion.objects.create(exam=exam, **row)
 
-    return exam
+    return _sync_exam_activation(exam)
 
 
 # ── Exam CRUD ──
@@ -179,7 +202,7 @@ def _import_general_writing_payload(payload, user, exam=None):
 @api_view(['GET', 'POST'])
 def exam_list(request):
     if request.method == 'GET':
-        exams = Exam.objects.filter(is_active=True).order_by('-created_at')
+        exams = _exam_queryset_for_request(request)
         family = (request.query_params.get('family') or '').strip().lower()
         if family in {Exam.FAMILY_GENERAL, Exam.FAMILY_FET}:
             exams = exams.filter(exam_family=family)
@@ -198,7 +221,10 @@ def exam_list(request):
 @api_view(['GET', 'PUT', 'DELETE'])
 def exam_detail(request, exam_id):
     try:
-        exam = Exam.objects.get(id=exam_id, is_active=True)
+        if _admin_only(request) and request.method in {'PUT', 'DELETE'}:
+            exam = Exam.objects.filter(is_deleted=False).get(id=exam_id)
+        else:
+            exam = _exam_queryset_for_request(request).get(id=exam_id)
     except Exam.DoesNotExist:
         return Response({'error': 'Not found'}, status=status.HTTP_404_NOT_FOUND)
 
@@ -212,10 +238,22 @@ def exam_detail(request, exam_id):
         for field in ['title', 'description', 'time_mins', 'exam_family']:
             if field in request.data:
                 setattr(exam, field, request.data[field])
+        if 'is_active' in request.data:
+            requested_active = _parse_bool(request.data.get('is_active'))
+            if requested_active and not exam.is_complete_for_activation:
+                exam.is_active = False
+                exam.save()
+                return Response({
+                    'error': exam.activation_block_reason,
+                    'exam': ExamDetailSerializer(exam).data,
+                }, status=status.HTTP_400_BAD_REQUEST)
+            exam.is_active = requested_active
         exam.save()
+        exam = _sync_exam_activation(exam)
         return Response(ExamDetailSerializer(exam).data)
 
     if request.method == 'DELETE':
+        exam.is_deleted = True
         exam.is_active = False
         exam.save()
         return Response({'detail': 'Deleted'}, status=status.HTTP_204_NO_CONTENT)
@@ -237,6 +275,7 @@ def add_writing_question(request, exam_id):
     serializer = WritingQuestionSerializer(data=data)
     if serializer.is_valid():
         question = serializer.save(exam=exam)
+        _sync_exam_activation(exam)
         return Response(WritingQuestionSerializer(question).data, status=status.HTTP_201_CREATED)
     return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
@@ -253,11 +292,13 @@ def update_writing_question(request, exam_id, question_id):
 
     if request.method == 'DELETE':
         question.delete()
+        _sync_exam_activation(question.exam)
         return Response({'detail': 'Deleted'}, status=status.HTTP_204_NO_CONTENT)
 
     serializer = WritingQuestionSerializer(question, data=request.data, partial=True)
     if serializer.is_valid():
         serializer.save()
+        _sync_exam_activation(question.exam)
         return Response(serializer.data)
     return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
@@ -276,6 +317,7 @@ def add_speaking_part(request, exam_id):
     serializer = SpeakingPartSerializer(data=request.data)
     if serializer.is_valid():
         part = serializer.save(exam=exam)
+        _sync_exam_activation(exam)
         return Response(SpeakingPartSerializer(part).data, status=status.HTTP_201_CREATED)
     return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
@@ -291,11 +333,13 @@ def update_speaking_part(request, exam_id, part_id):
 
     if request.method == 'DELETE':
         part.delete()
+        _sync_exam_activation(part.exam)
         return Response({'detail': 'Deleted'}, status=status.HTTP_204_NO_CONTENT)
 
     serializer = SpeakingPartSerializer(part, data=request.data, partial=True)
     if serializer.is_valid():
         serializer.save()
+        _sync_exam_activation(part.exam)
         return Response(serializer.data)
     return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
@@ -315,6 +359,7 @@ def update_reading_part(request, exam_id, part_number):
     part.content = content
     part.has_content = bool(content)
     part.save()
+    _sync_exam_activation(part.exam)
     return Response(ReadingPartAdminSerializer(part).data)
 
 

@@ -7,6 +7,7 @@ from rest_framework import status
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
 
+from apps.authentication.credits import create_credit_transaction
 from apps.exams.models import Exam, WritingQuestion, SpeakingPart
 from .models import ExamAttempt, WritingResponse, SpeakingResponse, ReadingResponse
 from .serializers import (
@@ -147,6 +148,19 @@ def submit_writing(request, attempt_id):
         if required_credits:
             user.ai_credits -= required_credits
             user.save(update_fields=['ai_credits'])
+            create_credit_transaction(
+                user=user,
+                delta=-required_credits,
+                description=f'{required_credits} credit spent on writing feedback for {attempt.exam.title}.',
+                source_type='writing_submission',
+                source_id=submission_group_id,
+                metadata={
+                    'attempt_id': str(attempt.id),
+                    'exam_id': str(attempt.exam_id),
+                    'exam_title': attempt.exam.title,
+                    'question_ids': [str(question.id) for question, _ in new_items],
+                },
+            )
             charged_now = True
             remaining_credits = user.ai_credits
 
@@ -201,6 +215,18 @@ def submit_speaking(request, attempt_id):
             return feature_error(f'Speaking assessment needs {credits_to_charge} more AI credit(s).', code='insufficient_credits', http_status=status.HTTP_402_PAYMENT_REQUIRED)
         user.ai_credits -= credits_to_charge
         user.save(update_fields=['ai_credits'])
+        create_credit_transaction(
+            user=user,
+            delta=-credits_to_charge,
+            description=f'{credits_to_charge} credits spent on speaking assessment for {attempt.exam.title}.',
+            source_type='speaking_scoring',
+            source_id=attempt.id,
+            metadata={
+                'attempt_id': str(attempt.id),
+                'exam_id': str(attempt.exam_id),
+                'exam_title': attempt.exam.title,
+            },
+        )
         remaining_credits = user.ai_credits
 
         response = SpeakingResponse.objects.create(
@@ -282,6 +308,18 @@ def speaking_chat(request, attempt_id):
                 return feature_error('You need at least 1 AI credit to start the speaking examiner.', code='insufficient_credits', http_status=status.HTTP_402_PAYMENT_REQUIRED)
             user.ai_credits -= 1
             user.save(update_fields=['ai_credits'])
+            create_credit_transaction(
+                user=user,
+                delta=-1,
+                description=f'1 credit spent to start speaking test for {attempt.exam.title}.',
+                source_type='speaking_start',
+                source_id=attempt.id,
+                metadata={
+                    'attempt_id': str(attempt.id),
+                    'exam_id': str(attempt.exam_id),
+                    'exam_title': attempt.exam.title,
+                },
+            )
             attempt.speaking_chat_credit_charged = True
             attempt.save(update_fields=['speaking_chat_credit_charged'])
             charged_now = True
@@ -309,6 +347,14 @@ def speaking_chat(request, attempt_id):
                 user = request.user.__class__.objects.select_for_update().get(pk=request.user.pk)
                 user.ai_credits += 1
                 user.save(update_fields=['ai_credits'])
+                create_credit_transaction(
+                    user=user,
+                    delta=1,
+                    description=f'1 credit refunded for speaking test start on {attempt.exam.title}.',
+                    source_type='speaking_start_refund',
+                    source_id=attempt.id,
+                    metadata={'attempt_id': str(attempt.id), 'exam_id': str(attempt.exam_id), 'exam_title': attempt.exam.title},
+                )
                 attempt.speaking_chat_credit_charged = False
                 attempt.save(update_fields=['speaking_chat_credit_charged'])
         return Response(
@@ -332,6 +378,14 @@ def speaking_chat(request, attempt_id):
                 user = request.user.__class__.objects.select_for_update().get(pk=request.user.pk)
                 user.ai_credits += 1
                 user.save(update_fields=['ai_credits'])
+                create_credit_transaction(
+                    user=user,
+                    delta=1,
+                    description=f'1 credit refunded for speaking test start on {attempt.exam.title}.',
+                    source_type='speaking_start_refund',
+                    source_id=attempt.id,
+                    metadata={'attempt_id': str(attempt.id), 'exam_id': str(attempt.exam_id), 'exam_title': attempt.exam.title},
+                )
                 attempt.speaking_chat_credit_charged = False
                 attempt.save(update_fields=['speaking_chat_credit_charged'])
         raise

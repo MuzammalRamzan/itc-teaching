@@ -19,6 +19,7 @@ class Exam(models.Model):
     created_by = models.ForeignKey(User, on_delete=models.PROTECT, related_name='created_exams')
     created_at = models.DateTimeField(auto_now_add=True)
     is_active = models.BooleanField(default=True)
+    is_deleted = models.BooleanField(default=False)
 
     class Meta:
         db_table = 'exams'
@@ -29,6 +30,28 @@ class Exam(models.Model):
 
     def question_count(self):
         return self.questions.count()
+
+    @property
+    def has_writing_content(self):
+        return self.questions.exists()
+
+    @property
+    def has_speaking_content(self):
+        return any(part.has_content for part in self.speaking_parts.all())
+
+    @property
+    def has_reading_content(self):
+        return any(part.question_count > 0 for part in self.reading_parts.all())
+
+    @property
+    def is_complete_for_activation(self):
+        return self.has_writing_content or self.has_speaking_content or self.has_reading_content
+
+    @property
+    def activation_block_reason(self):
+        if self.is_complete_for_activation:
+            return ''
+        return 'This exam cannot be activated until at least one question or content section is added.'
 
 
 class WritingQuestion(models.Model):
@@ -104,6 +127,16 @@ class SpeakingPart(models.Model):
 
     def __str__(self):
         return f'{self.exam.title} - {self.label}'
+
+    @property
+    def has_content(self):
+        if self.part in {'1', '4'}:
+            return bool(self.questions)
+        if self.part == '2':
+            return bool((self.situation_a or '').strip() or (self.situation_b or '').strip())
+        if self.part == '3':
+            return bool((self.central_question or '').strip() or self.options)
+        return False
 
 
 class ReadingPart(models.Model):

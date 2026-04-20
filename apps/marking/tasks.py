@@ -6,6 +6,8 @@ from django.conf import settings
 from django.db import transaction
 from django.utils import timezone
 
+from apps.authentication.credits import create_credit_transaction
+
 
 def refund_ai_credit(user_id, amount):
     from apps.authentication.models import User
@@ -13,6 +15,7 @@ def refund_ai_credit(user_id, amount):
     user = User.objects.select_for_update().get(id=user_id)
     user.ai_credits += amount
     user.save(update_fields=['ai_credits'])
+    return user
 
 
 FET_TASK1_SYSTEM_PROMPT = """You are marking Writing Task 1 using ONLY this rubric.
@@ -36,7 +39,8 @@ Criterion 2: Language and Organisation (0-5)
 - 0: did not attempt / absent / too little language to assess.
 
 STRICT RULES:
-- Award a band only when ALL criteria for that score are met. If between two scores, award the LOWER score.
+- Mark slightly generously while staying evidence-based.
+- If between two adjacent scores, award the HIGHER score when the lower-band description is clearly met and most of the next-band performance is present.
 - If the writing is too short, irrelevant, memorised, or impossible to assess properly, award 0 for both criteria.
 - Feedback must be honest. Do not give positive praise when there is too little relevant language.
 - Return JSON only with this exact shape:
@@ -63,11 +67,26 @@ Score guidance:
 - 0: totally irrelevant, incomprehensible, memorised, or too little language to assess
 
 STRICT RULES:
-- Award a score only when the full description for that band is met. If between two scores, award the LOWER score.
+- Mark slightly generously while staying evidence-based.
+- If between two adjacent scores, award the HIGHER score when the lower-band description is clearly met and most of the next-band performance is present.
 - If content is totally irrelevant, incomprehensible, memorised, or too short to assess, award 0 and set the other criteria to 0 as well.
 - Feedback must be honest and evidence-based. Do not give encouraging praise when the response is extremely weak.
 - Return JSON only with this exact shape:
 {"scores":{"content_communicative":N,"organisation":N,"vocabulary":N,"grammar":N},"total":N,"strengths":"...","improvements":"...","suggestion":"...","zero_reason":"..."}
+"""
+
+
+LEVEL_AWARE_FEEDBACK_PROMPT = """
+FEEDBACK CALIBRATION:
+- First estimate the student's current working level from the writing itself.
+- Tailor feedback to the student's actual ability, not to an ideal target performance.
+- For weaker students, use simpler language, focus on 1-2 important improvements, and recognise basic success clearly.
+- For mid-level students, balance encouragement with concrete next steps.
+- For stronger students, give more precise and demanding feedback about control, range, development, and accuracy.
+- Keep feedback supportive and realistic. Do not sound harsh or overly advanced for a weaker student.
+- "strengths" should name what the student can already do at their current level.
+- "improvements" should prioritise the most useful next step for that level.
+- "suggestion" should be one practical action the student can apply in the next answer.
 """
 
 
@@ -81,6 +100,17 @@ def _too_little_language(question, text):
     min_words = 6 if question.part == 1 else 12
     min_unique = 4 if question.part == 1 else 6
     return len(words) < min_words or len(unique_words) < min_unique
+
+
+def _build_writing_system_prompt(response, use_rubric_prompt):
+    if use_rubric_prompt:
+        base_prompt = FET_TASK1_SYSTEM_PROMPT if response.question.part == 1 else FET_TASK2_SYSTEM_PROMPT
+    else:
+        base_prompt = settings.B1W_SYSTEM_PROMPT
+
+    exam_family = getattr(response.attempt.exam, 'exam_family', '')
+    exam_context = 'FET writing exam focused on foundation-level learners.' if exam_family == 'fet' else 'General B1 writing exam.'
+    return f"{base_prompt}\n{LEVEL_AWARE_FEEDBACK_PROMPT}\nEXAM CONTEXT:\n- {exam_context}"
 
 
 def _clamp_score(value, maximum=5):
@@ -215,6 +245,39 @@ def _normalise_writing_result(response, data):
     }
 
 
+def _soften_borderline_writing_scores(response, normalised):
+    question = getattr(response, 'question', None)
+    if not question or getattr(response.attempt.exam, 'exam_family', '') != 'fet':
+        return normalised
+
+    if normalised['zero_reason'] or not (response.text or '').strip():
+        return normalised
+
+    if question.part == 1:
+        total = int(normalised['total'] or 0)
+        if total in {5, 7, 9}:
+            if total == 5 and normalised['score_content'] < 5:
+                normalised['score_content'] += 1
+            elif normalised['score_language'] < 5:
+                normalised['score_language'] += 1
+            normalised['total'] = normalised['score_content'] + normalised['score_language']
+        return normalised
+
+    total = int(normalised['total'] or 0)
+    if total in {9, 13, 17}:
+        for field in ('score_language', 'score_organisation', 'score_communicative', 'score_content'):
+            if (normalised[field] or 0) < 5:
+                normalised[field] += 1
+                break
+        normalised['total'] = (
+            normalised['score_content']
+            + normalised['score_communicative']
+            + normalised['score_organisation']
+            + normalised['score_language']
+        )
+    return normalised
+
+
 @shared_task(bind=True, max_retries=3, default_retry_delay=10)
 def mark_writing_response(self, response_id):
     from apps.attempts.models import WritingResponse
@@ -247,12 +310,13 @@ def mark_writing_response(self, response_id):
             result = client.messages.create(
                 model='claude-sonnet-4-20250514',
                 max_tokens=1000,
-                system=FET_TASK1_SYSTEM_PROMPT if use_rubric_prompt and q.part == 1 else FET_TASK2_SYSTEM_PROMPT if use_rubric_prompt and q.part == 2 else settings.B1W_SYSTEM_PROMPT,
+                system=_build_writing_system_prompt(response, use_rubric_prompt),
                 messages=[{'role': 'user', 'content': prompt}]
             )
             data = json.loads(result.content[0].text.replace('```json', '').replace('```', '').strip())
 
         normalised = _normalise_writing_result(response, data)
+        normalised = _soften_borderline_writing_scores(response, normalised)
         with transaction.atomic():
             response = WritingResponse.objects.select_for_update().select_related('attempt__user').get(id=response_id)
 
@@ -295,7 +359,19 @@ def mark_writing_response(self, response_id):
                             None,
                         )
                         if charged_response and all(item.mark_status == WritingResponse.STATUS_FAILED for item in group_responses):
-                            refund_ai_credit(response.attempt.user_id, 1)
+                            user = refund_ai_credit(response.attempt.user_id, 1)
+                            create_credit_transaction(
+                                user=user,
+                                delta=1,
+                                description=f'1 credit refunded for writing feedback on {response.attempt.exam.title}.',
+                                source_type='writing_refund',
+                                source_id=response.submission_group_id,
+                                metadata={
+                                    'attempt_id': str(response.attempt_id),
+                                    'exam_id': str(response.attempt.exam_id),
+                                    'exam_title': response.attempt.exam.title,
+                                },
+                            )
                             charged_response.credits_refunded = True
                             charged_response.save(update_fields=['credits_refunded'])
             except Exception:
@@ -364,7 +440,19 @@ def mark_speaking_response(self, response_id):
                     update_fields = ['mark_status']
                     response.mark_status = 'failed'
                     if not response.credits_refunded:
-                        refund_ai_credit(response.attempt.user_id, response.credits_charged)
+                        user = refund_ai_credit(response.attempt.user_id, response.credits_charged)
+                        create_credit_transaction(
+                            user=user,
+                            delta=response.credits_charged,
+                            description=f'{response.credits_charged} credits refunded for speaking assessment on {response.attempt.exam.title}.',
+                            source_type='speaking_refund',
+                            source_id=response.id,
+                            metadata={
+                                'attempt_id': str(response.attempt_id),
+                                'exam_id': str(response.attempt.exam_id),
+                                'exam_title': response.attempt.exam.title,
+                            },
+                        )
                         response.credits_refunded = True
                         update_fields.append('credits_refunded')
                     response.save(update_fields=update_fields)

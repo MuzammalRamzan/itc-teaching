@@ -104,6 +104,68 @@ class Promotion(models.Model):
         return self.code
 
 
+class PricingPackageContent(models.Model):
+    product_key = models.CharField(max_length=50, unique=True)
+    kind = models.CharField(max_length=20, default='plan')
+    is_active = models.BooleanField(default=True)
+    price_override = models.DecimalField(max_digits=8, decimal_places=2, null=True, blank=True)
+    credits_override = models.IntegerField(null=True, blank=True)
+    title_ar = models.CharField(max_length=200, blank=True, default='')
+    title_en = models.CharField(max_length=200, blank=True, default='')
+    subtitle_ar = models.CharField(max_length=200, blank=True, default='')
+    subtitle_en = models.CharField(max_length=200, blank=True, default='')
+    hook_ar = models.TextField(blank=True, default='')
+    hook_en = models.TextField(blank=True, default='')
+    description_ar = models.TextField(blank=True, default='')
+    description_en = models.TextField(blank=True, default='')
+    cta_ar = models.CharField(max_length=200, blank=True, default='')
+    cta_en = models.CharField(max_length=200, blank=True, default='')
+    features_ar = models.JSONField(default=list, blank=True)
+    features_en = models.JSONField(default=list, blank=True)
+    badge_ar = models.CharField(max_length=120, blank=True, default='')
+    badge_en = models.CharField(max_length=120, blank=True, default='')
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'pricing_package_contents'
+        ordering = ['product_key']
+
+    def __str__(self):
+        return self.product_key
+
+
+class LandingPageSetting(models.Model):
+    APP_ITS = 'its'
+    APP_FET = 'fet'
+    APP_CHOICES = [
+        (APP_ITS, 'ITS'),
+        (APP_FET, 'FET'),
+    ]
+
+    app_key = models.CharField(max_length=20, choices=APP_CHOICES, unique=True)
+    countdown_enabled = models.BooleanField(default=False)
+    countdown_target = models.DateTimeField(null=True, blank=True)
+    hero_badge_ar = models.CharField(max_length=200, blank=True, default='')
+    hero_badge_en = models.CharField(max_length=200, blank=True, default='')
+    hero_title_ar = models.CharField(max_length=255, blank=True, default='')
+    hero_title_en = models.CharField(max_length=255, blank=True, default='')
+    hero_subtitle_ar = models.TextField(blank=True, default='')
+    hero_subtitle_en = models.TextField(blank=True, default='')
+    primary_cta_ar = models.CharField(max_length=200, blank=True, default='')
+    primary_cta_en = models.CharField(max_length=200, blank=True, default='')
+    secondary_cta_ar = models.CharField(max_length=200, blank=True, default='')
+    secondary_cta_en = models.CharField(max_length=200, blank=True, default='')
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'landing_page_settings'
+        ordering = ['app_key']
+
+    def __str__(self):
+        return self.app_key
+
+
 class PaymentRecord(models.Model):
     KIND_PLAN = 'plan'
     KIND_CREDITS = 'credits'
@@ -144,3 +206,31 @@ class PaymentRecord(models.Model):
 
     def __str__(self):
         return f'{self.user.email} · {self.kind} · {self.amount_sar} SAR'
+
+
+class CreditTransaction(models.Model):
+    TYPE_DEBIT = 'debit'
+    TYPE_CREDIT = 'credit'
+    TYPE_CHOICES = [
+        (TYPE_DEBIT, 'Debit'),
+        (TYPE_CREDIT, 'Credit'),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='credit_transactions')
+    entry_type = models.CharField(max_length=20, choices=TYPE_CHOICES)
+    delta = models.IntegerField()
+    balance_after = models.IntegerField(default=0)
+    description = models.CharField(max_length=255)
+    source_type = models.CharField(max_length=50, blank=True, default='')
+    source_id = models.CharField(max_length=100, blank=True, default='')
+    metadata = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'credit_transactions'
+        ordering = ['-created_at']
+
+    def __str__(self):
+        sign = '+' if self.delta >= 0 else ''
+        return f'{self.user.email} · {sign}{self.delta} · {self.description}'

@@ -37,33 +37,50 @@ class ReadingPartAdminSerializer(serializers.ModelSerializer):
 
 class ExamListSerializer(serializers.ModelSerializer):
     question_count = serializers.SerializerMethodField()
+    is_complete = serializers.SerializerMethodField()
+    activation_block_reason = serializers.SerializerMethodField()
 
     class Meta:
         model = Exam
-        fields = ['id', 'title', 'description', 'time_mins', 'exam_family', 'created_at', 'question_count']
+        fields = ['id', 'title', 'description', 'time_mins', 'exam_family', 'created_at', 'question_count', 'is_active', 'is_complete', 'activation_block_reason']
 
     def get_question_count(self, obj):
         return obj.questions.count()
+
+    def get_is_complete(self, obj):
+        return obj.is_complete_for_activation
+
+    def get_activation_block_reason(self, obj):
+        return obj.activation_block_reason
 
 
 class ExamDetailSerializer(serializers.ModelSerializer):
     questions = WritingQuestionSerializer(many=True, read_only=True)
     speaking_parts = SpeakingPartSerializer(many=True, read_only=True)
     reading_parts = ReadingPartSerializer(many=True, read_only=True)
+    is_complete = serializers.SerializerMethodField()
+    activation_block_reason = serializers.SerializerMethodField()
 
     class Meta:
         model = Exam
         fields = ['id', 'title', 'description', 'time_mins', 'exam_family', 'created_at',
-                  'questions', 'speaking_parts', 'reading_parts']
+                  'is_active', 'is_complete', 'activation_block_reason', 'questions', 'speaking_parts', 'reading_parts']
+
+    def get_is_complete(self, obj):
+        return obj.is_complete_for_activation
+
+    def get_activation_block_reason(self, obj):
+        return obj.activation_block_reason
 
 
 class ExamCreateSerializer(serializers.ModelSerializer):
     class Meta:
         model = Exam
-        fields = ['title', 'description', 'time_mins', 'exam_family']
+        fields = ['title', 'description', 'time_mins', 'exam_family', 'is_active']
 
     def create(self, validated_data):
         user = self.context['request'].user
+        validated_data['is_active'] = False
         exam = Exam.objects.create(created_by=user, **validated_data)
         # Auto-create the 6 reading part slots
         for part_num in range(1, 7):

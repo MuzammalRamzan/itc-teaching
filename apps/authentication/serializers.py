@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import User
+from .models import CreditTransaction, User
 
 
 class UserSerializer(serializers.ModelSerializer):
@@ -15,3 +15,20 @@ class UserSerializer(serializers.ModelSerializer):
 
     def get_capabilities(self, obj):
         return obj.capability_map()
+
+
+class CreditTransactionSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = CreditTransaction
+        fields = [
+            'id',
+            'entry_type',
+            'delta',
+            'balance_after',
+            'description',
+            'source_type',
+            'source_id',
+            'metadata',
+            'created_at',
+        ]
+        read_only_fields = fields
