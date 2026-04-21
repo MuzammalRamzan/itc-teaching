@@ -319,6 +319,37 @@ def mark_writing_response(self, response_id):
         normalised = _soften_borderline_writing_scores(response, normalised)
         with transaction.atomic():
             response = WritingResponse.objects.select_for_update().select_related('attempt__user').get(id=response_id)
+            charged_now = False
+
+            if response.submission_group_id and not response.attempt.bypass_ai_credits:
+                group_responses = list(
+                    WritingResponse.objects.select_for_update().filter(
+                        attempt=response.attempt,
+                        submission_group_id=response.submission_group_id,
+                    )
+                )
+                charged_response = next((item for item in group_responses if item.credits_charged), None)
+                if charged_response is None:
+                    user = response.attempt.user.__class__.objects.select_for_update().get(pk=response.attempt.user_id)
+                    if user.ai_credits < 1:
+                        raise RuntimeError('You need at least 1 AI credit to finish writing marking.')
+                    user.ai_credits -= 1
+                    user.save(update_fields=['ai_credits'])
+                    create_credit_transaction(
+                        user=user,
+                        delta=-1,
+                        description=f'1 credit spent on writing feedback for {response.attempt.exam.title}.',
+                        source_type='writing_submission',
+                        source_id=response.submission_group_id,
+                        metadata={
+                            'attempt_id': str(response.attempt_id),
+                            'exam_id': str(response.attempt.exam_id),
+                            'exam_title': response.attempt.exam.title,
+                            'question_id': str(response.question_id),
+                        },
+                    )
+                    response.credits_charged = True
+                    charged_now = True
 
             response.score_content = normalised['score_content']
             response.score_communicative = normalised['score_communicative']
@@ -333,7 +364,24 @@ def mark_writing_response(self, response_id):
             response.zero_reason = normalised['zero_reason']
             response.mark_status = 'done'
             response.marked_at = timezone.now()
-            response.save()
+            update_fields = [
+                'score_content',
+                'score_communicative',
+                'score_organisation',
+                'score_language',
+                'total',
+                'band',
+                'cefr',
+                'strengths',
+                'improvements',
+                'suggestion',
+                'zero_reason',
+                'mark_status',
+                'marked_at',
+            ]
+            if charged_now:
+                update_fields.append('credits_charged')
+            response.save(update_fields=update_fields)
 
     except Exception as exc:
         if self.request.retries >= self.max_retries:

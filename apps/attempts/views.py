@@ -26,6 +26,7 @@ def create_attempt(request):
     exam_id = request.data.get('exam_id')
     mode = request.data.get('mode', 'practice')
     section = request.data.get('section', '')
+    is_fet_app = request.headers.get('X-ITC-App') == 'frontendFET'
 
     try:
         exam = Exam.objects.get(id=exam_id, is_active=True)
@@ -38,6 +39,12 @@ def create_attempt(request):
     elif section == 'writing':
         if not request.user.can_access_writing():
             return feature_error('Your current plan does not include writing access.')
+        if is_fet_app and request.user.ai_credits < 1:
+            return feature_error(
+                'You need at least 1 AI credit before starting this writing submission.',
+                code='insufficient_credits',
+                http_status=status.HTTP_402_PAYMENT_REQUIRED,
+            )
     elif section == 'speaking':
         if not request.user.can_access_speaking():
             return feature_error('Your current plan does not include speaking access.')
@@ -56,13 +63,11 @@ def create_attempt(request):
         if existing_attempt:
             return Response(AttemptSerializer(existing_attempt).data, status=status.HTTP_200_OK)
 
-    bypass_ai_credits = request.headers.get('X-ITC-App') == 'frontendFET'
-
     attempt = ExamAttempt.objects.create(
         user=request.user,
         exam=exam,
         mode=mode,
-        bypass_ai_credits=bypass_ai_credits,
+        bypass_ai_credits=False,
     )
     return Response(AttemptSerializer(attempt).data, status=status.HTTP_201_CREATED)
 
@@ -111,7 +116,6 @@ def submit_writing(request, attempt_id):
     created_ids = []
     queued_ids = []
     reused_existing = False
-    charged_now = False
     remaining_credits = request.user.ai_credits
 
     with transaction.atomic():
@@ -145,24 +149,6 @@ def submit_writing(request, attempt_id):
             )
 
         submission_group_id = uuid.uuid4() if new_items else None
-        if required_credits:
-            user.ai_credits -= required_credits
-            user.save(update_fields=['ai_credits'])
-            create_credit_transaction(
-                user=user,
-                delta=-required_credits,
-                description=f'{required_credits} credit spent on writing feedback for {attempt.exam.title}.',
-                source_type='writing_submission',
-                source_id=submission_group_id,
-                metadata={
-                    'attempt_id': str(attempt.id),
-                    'exam_id': str(attempt.exam_id),
-                    'exam_title': attempt.exam.title,
-                    'question_ids': [str(question.id) for question, _ in new_items],
-                },
-            )
-            charged_now = True
-            remaining_credits = user.ai_credits
 
         for index, (question, text) in enumerate(new_items):
             response = WritingResponse.objects.create(
@@ -170,7 +156,7 @@ def submit_writing(request, attempt_id):
                 question=question,
                 text=text,
                 submission_group_id=submission_group_id,
-                credits_charged=bool(required_credits and index == 0),
+                credits_charged=False,
             )
             response_id = str(response.id)
             created_ids.append(response_id)
@@ -182,9 +168,9 @@ def submit_writing(request, attempt_id):
     return Response({
         'status': 'marking',
         'writing_response_ids': created_ids,
-        'credits_used': 1 if charged_now else 0,
+        'credits_used': 0,
         'remaining_credits': remaining_credits,
-        'message': 'Marking in progress. 1 AI credit has been used for this writing submission.' if charged_now else 'Marking in progress.',
+        'message': 'Marking in progress. 1 AI credit will be deducted after the report is generated successfully.' if queued_ids else 'Marking in progress.',
         'reused_existing': reused_existing,
     }, status=status.HTTP_202_ACCEPTED)
 
