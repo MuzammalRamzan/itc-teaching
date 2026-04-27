@@ -27,7 +27,12 @@ def _parse_bool(value):
 
 
 def _exam_queryset_for_request(request):
-    queryset = Exam.objects.filter(is_deleted=False).order_by('-created_at')
+    queryset = (
+        Exam.objects
+        .filter(is_deleted=False)
+        .prefetch_related('questions', 'reading_parts', 'speaking_parts')
+        .order_by('-created_at')
+    )
     include_inactive = _parse_bool(request.query_params.get('include_inactive')) if hasattr(request, 'query_params') else False
     if not (_admin_only(request) and include_inactive):
         queryset = queryset.filter(is_active=True)
@@ -206,7 +211,33 @@ def exam_list(request):
         family = (request.query_params.get('family') or '').strip().lower()
         if family in {Exam.FAMILY_GENERAL, Exam.FAMILY_FET}:
             exams = exams.filter(exam_family=family)
-        return Response(ExamListSerializer(exams, many=True).data)
+
+        page_param = request.query_params.get('page')
+        if page_param is None:
+            return Response(ExamListSerializer(exams, many=True).data)
+
+        try:
+            page = max(1, int(page_param))
+        except (TypeError, ValueError):
+            page = 1
+        try:
+            page_size = max(1, min(50, int(request.query_params.get('page_size', 12))))
+        except (TypeError, ValueError):
+            page_size = 12
+
+        total = exams.count()
+        start = (page - 1) * page_size
+        end = start + page_size
+        page_items = list(exams[start:end])
+        return Response({
+            'results': ExamListSerializer(page_items, many=True).data,
+            'count': total,
+            'page': page,
+            'page_size': page_size,
+            'total_pages': max(1, (total + page_size - 1) // page_size),
+            'has_next': end < total,
+            'has_prev': page > 1,
+        })
 
     if request.method == 'POST':
         if not _admin_only(request):

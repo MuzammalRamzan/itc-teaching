@@ -39,10 +39,14 @@ class ExamListSerializer(serializers.ModelSerializer):
     question_count = serializers.SerializerMethodField()
     is_complete = serializers.SerializerMethodField()
     activation_block_reason = serializers.SerializerMethodField()
+    has_writing_content = serializers.ReadOnlyField()
+    has_reading_content = serializers.ReadOnlyField()
 
     class Meta:
         model = Exam
-        fields = ['id', 'title', 'description', 'time_mins', 'exam_family', 'created_at', 'question_count', 'is_active', 'is_complete', 'activation_block_reason']
+        fields = ['id', 'title', 'description', 'time_mins', 'exam_family', 'created_at',
+                  'question_count', 'is_active', 'is_complete', 'activation_block_reason',
+                  'has_writing_content', 'has_reading_content']
 
     def get_question_count(self, obj):
         return obj.questions.count()
