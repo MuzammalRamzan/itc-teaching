@@ -7,14 +7,35 @@ from rest_framework import status
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
 
+from datetime import date
+
 from apps.authentication.credits import create_credit_transaction
 from apps.exams.models import Exam, WritingQuestion, SpeakingPart
-from .models import ExamAttempt, WritingResponse, SpeakingResponse, ReadingResponse
+from .models import ExamAttempt, WritingResponse, SpeakingResponse, ReadingResponse, CalendarEvent, UserBreakOptIn
 from .serializers import (
     AttemptSerializer, AttemptDetailSerializer,
-    WritingResponseSerializer, SpeakingResponseSerializer, ReadingResponseSerializer
+    WritingResponseSerializer, SpeakingResponseSerializer, ReadingResponseSerializer,
+    CalendarEventSerializer, CalendarEventAdminSerializer,
 )
 from .scoring import score_all_reading
+
+
+def _user_active_away_event(user):
+    """Returns the CalendarEvent the user has marked 'away' covering today, or None."""
+    if not user or not user.is_authenticated:
+        return None
+    today = date.today()
+    return (
+        CalendarEvent.objects.filter(
+            is_active=True,
+            starts_at__lte=today,
+            ends_at__gte=today,
+            opt_ins__user=user,
+            opt_ins__away=True,
+        )
+        .order_by('starts_at')
+        .first()
+    )
 
 
 def feature_error(message, code='feature_locked', http_status=status.HTTP_403_FORBIDDEN):
@@ -32,6 +53,24 @@ def create_attempt(request):
         exam = Exam.objects.get(id=exam_id, is_active=True)
     except Exam.DoesNotExist:
         return Response({'error': 'Exam not found'}, status=status.HTTP_404_NOT_FOUND)
+
+    # Block practice when the user is currently inside a break they've opted to be away for.
+    if section in {'writing', 'reading', 'speaking'} or mode == 'full_exam':
+        away_event = _user_active_away_event(request.user)
+        if away_event is not None:
+            return Response(
+                {
+                    'error': f'You\'re marked as away during "{away_event.name}". Practice resumes after the break.',
+                    'code': 'on_break',
+                    'event': {
+                        'id': str(away_event.id),
+                        'name': away_event.name,
+                        'starts_at': away_event.starts_at.isoformat(),
+                        'ends_at': away_event.ends_at.isoformat(),
+                    },
+                },
+                status=status.HTTP_403_FORBIDDEN,
+            )
 
     if mode == 'full_exam' or section == 'full_exam':
         if not request.user.can_access_full_exam():
@@ -403,15 +442,98 @@ def my_attempts(request):
 
 @api_view(['GET'])
 def my_fet_attempts(request):
+    # Returns the calling user's recent writing-bearing attempts. Was previously
+    # gated to exam_family='fet' but the frontendFET app also creates 'general'
+    # attempts; this endpoint is only consumed by frontendFET so the looser
+    # filter is the right semantic.
     attempts = (
         ExamAttempt.objects.filter(
             user=request.user,
-            exam__exam_family=Exam.FAMILY_FET,
             writing_responses__isnull=False,
         )
         .select_related('exam')
-        .prefetch_related('writing_responses__question')
+        .prefetch_related('writing_responses__question', 'reading_responses')
         .distinct()
         .order_by('-started_at')[:12]
     )
     return Response(AttemptDetailSerializer(attempts, many=True).data)
+
+
+@api_view(['GET'])
+def calendar_events(request):
+    """Lists active calendar events with current user's away opt-in state."""
+    today = date.today()
+    qs = CalendarEvent.objects.filter(is_active=True, ends_at__gte=today).order_by('order', 'starts_at')
+
+    try:
+        limit = max(1, min(20, int(request.query_params.get('limit', 6))))
+    except (TypeError, ValueError):
+        limit = 6
+    qs = qs[:limit]
+
+    return Response(CalendarEventSerializer(qs, many=True, context={'request': request}).data)
+
+
+@api_view(['POST'])
+def calendar_event_opt_in(request, event_id):
+    """Mark the current user as 'away' (or back) for a specific calendar event."""
+    try:
+        event = CalendarEvent.objects.get(id=event_id, is_active=True)
+    except CalendarEvent.DoesNotExist:
+        return Response({'error': 'Event not found'}, status=status.HTTP_404_NOT_FOUND)
+
+    away = bool(request.data.get('away', False))
+    opt_in, _ = UserBreakOptIn.objects.update_or_create(
+        user=request.user, event=event, defaults={'away': away}
+    )
+    return Response(CalendarEventSerializer(event, context={'request': request}).data)
+
+
+# ── Admin: manage calendar events ──
+
+def _admin_required(request):
+    if not request.user or not request.user.is_authenticated or not getattr(request.user, 'is_admin', False):
+        return Response({'error': 'Admin only'}, status=status.HTTP_403_FORBIDDEN)
+    return None
+
+
+@api_view(['GET', 'POST'])
+def calendar_events_admin(request):
+    forbidden = _admin_required(request)
+    if forbidden:
+        return forbidden
+
+    if request.method == 'GET':
+        qs = CalendarEvent.objects.all().order_by('order', 'starts_at')
+        return Response(CalendarEventAdminSerializer(qs, many=True).data)
+
+    serializer = CalendarEventAdminSerializer(data=request.data)
+    if not serializer.is_valid():
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+    event = serializer.save()
+    return Response(CalendarEventAdminSerializer(event).data, status=status.HTTP_201_CREATED)
+
+
+@api_view(['GET', 'PUT', 'DELETE'])
+def calendar_event_admin_detail(request, event_id):
+    forbidden = _admin_required(request)
+    if forbidden:
+        return forbidden
+
+    try:
+        event = CalendarEvent.objects.get(id=event_id)
+    except CalendarEvent.DoesNotExist:
+        return Response({'error': 'Event not found'}, status=status.HTTP_404_NOT_FOUND)
+
+    if request.method == 'GET':
+        return Response(CalendarEventAdminSerializer(event).data)
+
+    if request.method == 'DELETE':
+        event.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+    serializer = CalendarEventAdminSerializer(event, data=request.data, partial=True)
+    if not serializer.is_valid():
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+    event = serializer.save()
+    return Response(CalendarEventAdminSerializer(event).data)

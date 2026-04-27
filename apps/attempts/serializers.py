@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import ExamAttempt, WritingResponse, SpeakingResponse, ReadingResponse
+from .models import ExamAttempt, WritingResponse, SpeakingResponse, ReadingResponse, CalendarEvent, UserBreakOptIn
 
 
 def _max_total_for_question(question):
@@ -247,3 +247,44 @@ class AttemptDetailSerializer(serializers.ModelSerializer):
         fields = ['id', 'exam_id', 'exam_title', 'mode', 'status',
                   'started_at', 'completed_at',
                   'writing_responses', 'speaking_responses', 'reading_responses', 'writing_report', 'fet_writing_report']
+
+
+class CalendarEventSerializer(serializers.ModelSerializer):
+    """Serializes a calendar event with the request user's opt-in state."""
+    user_away = serializers.SerializerMethodField()
+
+    class Meta:
+        model = CalendarEvent
+        fields = [
+            'id', 'name', 'starts_at', 'ends_at', 'accent', 'hint', 'description',
+            'recommended_minutes_per_day', 'order', 'user_away',
+        ]
+
+    def get_user_away(self, obj):
+        request = self.context.get('request')
+        if not request or not request.user or not request.user.is_authenticated:
+            return False
+        opt_in = next((o for o in getattr(obj, '_user_opt_ins', []) if o.user_id == request.user.id), None)
+        if opt_in is None:
+            opt_in = UserBreakOptIn.objects.filter(event=obj, user=request.user).first()
+        return bool(opt_in and opt_in.away)
+
+
+class CalendarEventAdminSerializer(serializers.ModelSerializer):
+    """Admin-side serializer — full read/write surface including is_active."""
+
+    class Meta:
+        model = CalendarEvent
+        fields = [
+            'id', 'name', 'starts_at', 'ends_at', 'accent', 'hint', 'description',
+            'recommended_minutes_per_day', 'is_active', 'order',
+            'created_at', 'updated_at',
+        ]
+        read_only_fields = ['id', 'created_at', 'updated_at']
+
+    def validate(self, attrs):
+        starts_at = attrs.get('starts_at') or getattr(self.instance, 'starts_at', None)
+        ends_at = attrs.get('ends_at') or getattr(self.instance, 'ends_at', None)
+        if starts_at and ends_at and ends_at < starts_at:
+            raise serializers.ValidationError({'ends_at': 'End date must be the same as or after the start date.'})
+        return attrs

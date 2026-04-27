@@ -134,3 +134,55 @@ class ReadingResponse(models.Model):
 
     class Meta:
         db_table = 'reading_responses'
+
+
+class CalendarEvent(models.Model):
+    """Admin-managed academic-calendar events shown on the FET landing page."""
+
+    ACCENT_GREEN = 'green'
+    ACCENT_ORANGE = 'orange'
+    ACCENT_BLUE = 'blue'
+    ACCENT_PURPLE = 'purple'
+    ACCENT_RED = 'red'
+    ACCENT_CHOICES = [
+        (ACCENT_GREEN, 'Green'),
+        (ACCENT_ORANGE, 'Orange'),
+        (ACCENT_BLUE, 'Blue'),
+        (ACCENT_PURPLE, 'Purple'),
+        (ACCENT_RED, 'Red'),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    name = models.CharField(max_length=120)
+    starts_at = models.DateField()
+    ends_at = models.DateField()
+    accent = models.CharField(max_length=10, choices=ACCENT_CHOICES, default=ACCENT_GREEN)
+    hint = models.CharField(max_length=60, blank=True, default='')
+    description = models.TextField(blank=True, default='')
+    recommended_minutes_per_day = models.IntegerField(default=0, help_text='0 = full rest, 15 = light review, 25 = adjusted hours')
+    is_active = models.BooleanField(default=True)
+    order = models.IntegerField(default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'calendar_events'
+        ordering = ['order', 'starts_at']
+
+    def __str__(self):
+        return f'{self.name} ({self.starts_at} → {self.ends_at})'
+
+
+class UserBreakOptIn(models.Model):
+    """Per-user opt-in for an academic break: 'I'll be away'."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='break_opt_ins')
+    event = models.ForeignKey(CalendarEvent, on_delete=models.CASCADE, related_name='opt_ins')
+    away = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'user_break_opt_ins'
+        unique_together = ('user', 'event')

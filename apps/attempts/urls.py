@@ -11,4 +11,8 @@ urlpatterns = [
     path('attempts/<uuid:attempt_id>/complete/', views.complete_attempt, name='complete-attempt'),
     path('users/me/attempts/', views.my_attempts, name='my-attempts'),
     path('users/me/fet-attempts/', views.my_fet_attempts, name='my-fet-attempts'),
+    path('calendar/events/', views.calendar_events, name='calendar-events'),
+    path('calendar/events/<uuid:event_id>/opt-in/', views.calendar_event_opt_in, name='calendar-event-opt-in'),
+    path('calendar/admin/events/', views.calendar_events_admin, name='calendar-events-admin'),
+    path('calendar/admin/events/<uuid:event_id>/', views.calendar_event_admin_detail, name='calendar-event-admin-detail'),
 ]
