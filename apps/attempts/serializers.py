@@ -75,6 +75,7 @@ def _build_task_details(responses):
             getattr(getattr(item, 'question', None), 'order', 99),
         ),
     ):
+        feedback_json = response.feedback_json if isinstance(response.feedback_json, dict) else {}
         task_details.append({
             'id': str(response.id),
             'label': getattr(response.question, 'label', 'Question'),
@@ -88,6 +89,13 @@ def _build_task_details(responses):
             'suggestion': response.suggestion,
             'zero_reason': response.zero_reason,
             'mark_status': response.mark_status,
+            # FET v2 structured feedback
+            'student_level': response.student_level,
+            'potential_score': response.potential_score,
+            'well_done': response.well_done,
+            'practice_task': response.practice_task,
+            'criteria': feedback_json.get('criteria') or [],
+            'improvements_detail': feedback_json.get('improvements') or [],
         })
     return task_details
 
@@ -99,15 +107,28 @@ class WritingResponseSerializer(serializers.ModelSerializer):
     question_order = serializers.IntegerField(source='question.order', read_only=True)
     question_type = serializers.CharField(source='question.question_type', read_only=True)
     max_total = serializers.SerializerMethodField()
+    criteria = serializers.SerializerMethodField()
+    improvements_detail = serializers.SerializerMethodField()
 
     def get_max_total(self, obj):
         return _max_total_for_response(obj)
+
+    def get_criteria(self, obj):
+        feedback = obj.feedback_json if isinstance(obj.feedback_json, dict) else {}
+        return feedback.get('criteria') or []
+
+    def get_improvements_detail(self, obj):
+        feedback = obj.feedback_json if isinstance(obj.feedback_json, dict) else {}
+        return feedback.get('improvements') or []
 
     class Meta:
         model = WritingResponse
         fields = ['id', 'question_label', 'question_part', 'question_order', 'question_type', 'text', 'mark_status', 'scores', 'max_total',
                   'total', 'band', 'cefr', 'strengths', 'improvements',
-                  'suggestion', 'zero_reason', 'submitted_at', 'marked_at']
+                  'suggestion', 'zero_reason',
+                  'student_level', 'potential_score', 'well_done', 'practice_task',
+                  'criteria', 'improvements_detail',
+                  'submitted_at', 'marked_at']
 
 
 class SpeakingResponseSerializer(serializers.ModelSerializer):

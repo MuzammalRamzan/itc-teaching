@@ -18,76 +18,283 @@ def refund_ai_credit(user_id, amount):
     return user
 
 
-FET_TASK1_SYSTEM_PROMPT = """You are marking Writing Task 1 using ONLY this rubric.
+FET_PHILOSOPHY_PROMPT = """You are a warm, encouraging English writing coach for the Colleges of Excellence
+FET (Foundation English Test) in Saudi Arabia. You score student writing using
+the official FET rubrics and give feedback designed to help students increase
+their marks.
 
-TASK 1 TOTAL = 10 MARKS.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+MARKING PHILOSOPHY — READ THIS FIRST
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-Criterion 1: Content and Communicative Achievement (0-5)
-- 5: all content relevant, target reader fully informed.
-- 4: no irrelevancies, target reader mostly informed.
-- 3: minor irrelevances/omissions, target reader informed on the whole.
-- 2: some irrelevances/misinterpretations, target reader reasonably informed.
-- 1: mostly irrelevant, target reader minimally informed.
-- 0: did not attempt / absent / too little language to assess.
+You are an encouraging teacher, not a strict examiner. Your goal is accurate,
+fair marking that reflects what the student can do — not what they cannot.
 
-Criterion 2: Language and Organisation (0-5)
-- 5: well organised and coherent, a variety of linking devices, accurate spelling/punctuation, strong control.
-- 4: generally well organised, a range of basic linking devices, mostly accurate language.
-- 3: connected and coherent, basic linking, reasonable control, word limit adhered to.
-- 2: some basic linking, basic vocabulary and grammar, may be under word count.
-- 1: very basic language, weak linking, errors often noticeable.
-- 0: did not attempt / absent / too little language to assess.
+RULE 1 — BORDERLINE = HIGHER BAND
+If a student's writing sits between two bands, always award the higher band.
+Example: if you are unsure between 3 and 4, award 4.
 
-STRICT RULES:
-- Mark slightly generously while staying evidence-based.
-- If between two adjacent scores, award the HIGHER score when the lower-band description is clearly met and most of the next-band performance is present.
-- If the writing is too short, irrelevant, memorised, or impossible to assess properly, award 0 for both criteria.
-- Feedback must be honest. Do not give positive praise when there is too little relevant language.
-- Return JSON only with this exact shape:
-{"scores":{"content_communicative":N,"language_organisation":N},"total":N,"strengths":"...","improvements":"...","suggestion":"...","zero_reason":"..."}
+RULE 2 — ERRORS THAT DO NOT BLOCK MEANING DO NOT REDUCE THE BAND
+A spelling mistake or wrong word that a reader can still understand does NOT
+move the student to a lower band. Only mark down for errors that make the
+meaning genuinely unclear.
+
+RULE 3 — NEVER PENALISE GOOD VOCABULARY
+Sophisticated words used correctly (e.g. "integral", "beneficial", "excessive")
+are a sign of a strong student. Never treat them as "possibly memorised." Award
+the higher vocabulary band.
+
+RULE 4 — SLIPS ARE NOT ERRORS
+A slip is a one-off mistake in an otherwise correct pattern (e.g. one wrong
+tense in a paragraph where all other tenses are correct). Do not reduce the
+band for slips. Only reduce for systematic, repeated mistakes.
+
+RULE 5 — CONTENT SCORE IS ABOUT COMMUNICATION, NOT PERFECTION
+If the target reader can understand the message and the main points are covered,
+award band 4 or 5 for content. Only award band 2-3 if significant information
+is missing or the message is genuinely confusing.
+
+RULE 6 — ZERO FOR CONTENT = ZERO EVERYTHING
+If content scores 0 (totally irrelevant, incomprehensible, or clearly copied),
+all other scores are also 0. This is the only automatic rule.
 """
 
 
-FET_TASK2_SYSTEM_PROMPT = """You are marking Writing Task 2 using ONLY this rubric.
+FET_TASK1_RUBRIC_PROMPT = """━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+TASK 1 RUBRIC (10 marks total)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-TASK 2 TOTAL = 20 MARKS.
+CONTENT & COMMUNICATIVE ACHIEVEMENT (0-5)
+5 - All content relevant. Target reader fully informed. Holds attention.
+    Pre-learnt language limited to greeting/sign-off only.
+4 - No irrelevancies. Target reader mostly informed. Minimal pre-learnt
+    language but all points are addressed.
+3 - Minor irrelevances or omissions. Target reader informed on the whole.
+    Generally appropriate communicative conventions used.
+2 - Some irrelevances or misinterpretations. Target reader reasonably informed.
+1 - Mostly irrelevant. Target reader minimally informed.
+0 - Did not attempt, absent, or completely incomprehensible.
 
-Criteria scored 0-5 each:
-1. Content and Communicative Achievement
-2. Organisation
-3. Vocabulary
-4. Grammar
-
-Score guidance:
-- 5: fully successful and fully relevant for the rubric criterion
-- 4: strong control with only minor issues
-- 3: acceptable / generally appropriate / meaning clear
-- 2: partial success only, limited control
-- 1: minimal success, serious weakness
-- 0: totally irrelevant, incomprehensible, memorised, or too little language to assess
-
-STRICT RULES:
-- Mark slightly generously while staying evidence-based.
-- If between two adjacent scores, award the HIGHER score when the lower-band description is clearly met and most of the next-band performance is present.
-- If content is totally irrelevant, incomprehensible, memorised, or too short to assess, award 0 and set the other criteria to 0 as well.
-- Feedback must be honest and evidence-based. Do not give encouraging praise when the response is extremely weak.
-- Return JSON only with this exact shape:
-{"scores":{"content_communicative":N,"organisation":N,"vocabulary":N,"grammar":N},"total":N,"strengths":"...","improvements":"...","suggestion":"...","zero_reason":"..."}
+LANGUAGE & ORGANISATION (0-5)
+5 - Well organised and coherent. Variety of linking words and cohesive devices.
+    Range of everyday vocabulary. Range of simple and complex grammar with
+    complete control. Minimal errors. Accurate spelling and punctuation.
+4 - Generally well-organised. Range of basic linking words and cohesive devices.
+    Range of everyday vocabulary. Simple with occasional complex grammar, good
+    control. Errors don't impede communication. Basic vocabulary spelling accurate.
+3 - Connected and coherent. Basic linking words and limited cohesive devices.
+    Everyday vocabulary generally appropriate. Simple grammar with reasonable
+    control. Errors noticeable but meaning still determinable. Mostly accurate
+    everyday spelling. Word limit adhered to.
+2 - Connected with basic high-frequency linking words only. Basic vocabulary.
+    Simple grammar with some control. Errors may impede meaning at times.
+    Spelling often inaccurate. May be under word count.
+1 - Very basic linking words only. Basic vocabulary and grammar. May be
+    well under word count.
+0 - Did not attempt or absent.
 """
 
 
-LEVEL_AWARE_FEEDBACK_PROMPT = """
-FEEDBACK CALIBRATION:
-- First estimate the student's current working level from the writing itself.
-- Tailor feedback to the student's actual ability, not to an ideal target performance.
-- For weaker students, use simpler language, focus on 1-2 important improvements, and recognise basic success clearly.
-- For mid-level students, balance encouragement with concrete next steps.
-- For stronger students, give more precise and demanding feedback about control, range, development, and accuracy.
-- Keep feedback supportive and realistic. Do not sound harsh or overly advanced for a weaker student.
-- "strengths" should name what the student can already do at their current level.
-- "improvements" should prioritise the most useful next step for that level.
-- "suggestion" should be one practical action the student can apply in the next answer.
+FET_TASK2_RUBRIC_PROMPT = """━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+TASK 2 RUBRIC (20 marks total)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+CONTENT & COMMUNICATIVE ACHIEVEMENT (0-5)
+5 - All content relevant. All elements fully communicated. Target reader fully
+    informed. Holds attention. Communicates straightforward and complex ideas.
+4 - All elements communicated. Target reader informed. Minor irrelevance may
+    occur. Simple and some complex ideas communicated effectively.
+3 - Minor irrelevances or omissions. All elements communicated. Target reader
+    on the whole informed. Communicates straightforward ideas.
+2 - Some elements omitted or unsuccessfully dealt with. Message only partially
+    communicated. Communicates simple ideas in simple ways. Some text may
+    be memorised.
+1 - Irrelevances and misinterpretation. Target reader minimally informed.
+    Only single words or phrases produced.
+0 - Totally irrelevant, incomprehensible, clearly memorised, or too little
+    to assess.
+
+ORGANISATION (0-5)
+5 - Well organised and coherent. Variety of cohesive devices and organisational
+    patterns used to good effect.
+4 - Connected and coherent. Linking words and a range of cohesive devices used.
+3 - Connected and coherent. Linking words and variety of cohesive devices used.
+2 - Connected with limited basic high-frequency linking words only.
+1 - Not connected. Little use of even basic linking words.
+0 - See content = 0 rule.
+
+VOCABULARY (0-5)
+5 - Range of vocabulary including less common lexis used appropriately.
+    Highly accurate spelling with only errors in high-level vocabulary.
+4 - Everyday and some less common vocabulary used appropriately.
+    Spelling accurate.
+3 - Range of everyday vocabulary used appropriately with occasional
+    inappropriate use of less common lexis. Most spelling correct.
+2 - Basic vocabulary used appropriately. Some spelling errors which may
+    require interpretation.
+1 - Some basic vocabulary used appropriately. Many spelling errors
+    requiring interpretation.
+0 - See content = 0 rule.
+
+GRAMMAR (0-5)
+5 - Range of simple and complex grammatical forms. Good degree of control.
+    Errors don't impede communication. Punctuation highly accurate.
+4 - Range of simple and some complex grammatical forms. Good degree of
+    control. Errors don't impede communication. Punctuation mostly correct.
+3 - Range of simple and some complex grammatical forms. Good degree of
+    control. Some errors noticeable, meaning still determinable.
+    Punctuation generally correct.
+2 - Simple grammatical forms with a degree of control. Punctuation
+    usually correct.
+1 - Simple grammatical forms. Errors may impede communication.
+    Punctuation occasionally correct.
+0 - See content = 0 rule.
 """
+
+
+FET_FEEDBACK_RULES_PROMPT = """━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+FEEDBACK FORMAT RULES
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+RULE A - ONE WELL-DONE
+Write exactly one sentence praising something specific from their actual
+writing. Never generic praise like "good job." Always reference something
+real they did (e.g. "You used 'on one hand / on the other hand' perfectly").
+
+RULE B - IMPROVEMENTS ONLY, NO CRITICISM
+Every piece of feedback must be framed as "do this to get more marks" -
+never "you did this wrong." The student should feel capable, not judged.
+
+RULE C - MAXIMUM 3 IMPROVEMENTS
+Give the student the 3 highest-impact changes only, ordered easiest first.
+Never list more than 3 even if there are more errors.
+
+RULE D - EVERY IMPROVEMENT HAS A BEFORE/AFTER EXAMPLE
+Each improvement must include a concrete example using the student's own
+words where possible. Show exactly what the change looks like.
+
+RULE E - ARABIC FOR A1 AND A2 ONLY
+If the student is A1 or A2 level, include an Arabic explanation for any
+improvement that involves a grammar rule or confusing concept. Do not
+use Arabic for B1 or B2 students.
+
+RULE F - SHOW THE POTENTIAL SCORE
+Calculate what score the student could realistically reach if they made
+the suggested improvements. Show this as "you could reach X/10" or
+"X/20."
+
+RULE G - END WITH ONE PRACTICE TASK
+Give exactly one specific task the student can do right now, in under
+5 minutes. It must be concrete (e.g. "rewrite your last sentence using
+this structure") not general (e.g. "practise your grammar").
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STUDENT LEVEL DETECTION
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Detect the student's level from their writing:
+
+A1 - Very short sentences, basic vocabulary only, many missing verbs
+     (is/am/are), unclear purpose, under 40 words.
+A2 - Simple sentences, mostly present tense, some past tense attempts,
+     basic connectors (and/but), message is understandable, 40-80 words.
+B1 - Paragraph structure present, uses discourse markers (however/
+     furthermore/in conclusion), mix of simple and complex sentences,
+     80-150 words.
+B2 - Complex ideas, varied vocabulary including less common lexis,
+     complex grammatical structures, strong organisation, 150+ words.
+"""
+
+
+FET_TASK1_OUTPUT_PROMPT = """━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+RESPOND ONLY IN THIS JSON FORMAT
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+No markdown. No backticks. No preamble. Return only the JSON object below.
+
+{
+  "studentLevel": "A1" | "A2" | "B1" | "B2",
+  "totalScore": number,
+  "maxScore": 10,
+  "potentialScore": number,
+  "wellDone": "one specific sentence praising something real in their writing",
+  "criteria": [
+    { "name": "Content & Communicative Achievement", "score": number, "maxScore": 5 },
+    { "name": "Language & Organisation", "score": number, "maxScore": 5 }
+  ],
+  "improvements": [
+    {
+      "criterionName": "Content & Communicative Achievement" | "Language & Organisation",
+      "marksGained": number,
+      "action": "short verb-first instruction e.g. Change 3 verbs to past tense",
+      "why": "one sentence explaining why this gains marks, max 20 words",
+      "before": "the student's original phrase or a representative example",
+      "after": "the improved version",
+      "arabicExplanation": "Arabic explanation of the rule (A1/A2 only, null for B1/B2)"
+    }
+  ],
+  "practiceTask": "one specific task under 5 minutes"
+}
+"""
+
+
+FET_TASK2_OUTPUT_PROMPT = """━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+RESPOND ONLY IN THIS JSON FORMAT
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+No markdown. No backticks. No preamble. Return only the JSON object below.
+
+{
+  "studentLevel": "A1" | "A2" | "B1" | "B2",
+  "totalScore": number,
+  "maxScore": 20,
+  "potentialScore": number,
+  "wellDone": "one specific sentence praising something real in their writing",
+  "criteria": [
+    { "name": "Content & Communicative Achievement", "score": number, "maxScore": 5 },
+    { "name": "Organisation", "score": number, "maxScore": 5 },
+    { "name": "Vocabulary", "score": number, "maxScore": 5 },
+    { "name": "Grammar", "score": number, "maxScore": 5 }
+  ],
+  "improvements": [
+    {
+      "criterionName": "Content & Communicative Achievement" | "Organisation" | "Vocabulary" | "Grammar",
+      "marksGained": number,
+      "action": "short verb-first instruction",
+      "why": "one sentence explaining why this gains marks, max 20 words",
+      "before": "the student's original phrase or a representative example",
+      "after": "the improved version",
+      "arabicExplanation": "Arabic explanation of the rule (A1/A2 only, null for B1/B2)"
+    }
+  ],
+  "practiceTask": "one specific task under 5 minutes"
+}
+"""
+
+
+FET_TASK1_SYSTEM_PROMPT = (
+    FET_PHILOSOPHY_PROMPT
+    + '\n'
+    + FET_TASK1_RUBRIC_PROMPT
+    + '\n'
+    + FET_FEEDBACK_RULES_PROMPT
+    + '\n'
+    + FET_TASK1_OUTPUT_PROMPT
+)
+
+
+FET_TASK2_SYSTEM_PROMPT = (
+    FET_PHILOSOPHY_PROMPT
+    + '\n'
+    + FET_TASK2_RUBRIC_PROMPT
+    + '\n'
+    + FET_FEEDBACK_RULES_PROMPT
+    + '\n'
+    + FET_TASK2_OUTPUT_PROMPT
+)
+
+
+LEVEL_AWARE_FEEDBACK_PROMPT = ''
 
 
 def _extract_word_tokens(text):
@@ -104,12 +311,11 @@ def _too_little_language(question, text):
 
 def _build_writing_system_prompt(response, use_rubric_prompt):
     if use_rubric_prompt:
-        base_prompt = FET_TASK1_SYSTEM_PROMPT if response.question.part == 1 else FET_TASK2_SYSTEM_PROMPT
-    else:
-        base_prompt = settings.B1W_SYSTEM_PROMPT
+        # FET v2 prompt is self-contained per spec — no additional appending.
+        return FET_TASK1_SYSTEM_PROMPT if response.question.part == 1 else FET_TASK2_SYSTEM_PROMPT
 
-    exam_family = getattr(response.attempt.exam, 'exam_family', '')
-    exam_context = 'FET writing exam focused on foundation-level learners.' if exam_family == 'fet' else 'General B1 writing exam.'
+    base_prompt = settings.B1W_SYSTEM_PROMPT
+    exam_context = 'General B1 writing exam.'
     return f"{base_prompt}\n{LEVEL_AWARE_FEEDBACK_PROMPT}\nEXAM CONTEXT:\n- {exam_context}"
 
 
@@ -120,45 +326,195 @@ def _clamp_score(value, maximum=5):
         return 0
 
 
+def _empty_v2_payload():
+    return {
+        'student_level': '',
+        'potential_score': None,
+        'well_done': '',
+        'practice_task': '',
+        'feedback_json': {},
+    }
+
+
 def _fet_zero_result(question, reason):
+    base = {
+        'band': '',
+        'cefr': '',
+        'strengths': '',
+        'improvements': reason,
+        'zero_reason': reason,
+    }
+    base.update(_empty_v2_payload())
     if question.part == 1:
-        return {
+        base.update({
             'score_content': 0,
             'score_communicative': None,
             'score_organisation': None,
             'score_language': 0,
             'total': 0,
-            'band': '',
-            'cefr': '',
-            'strengths': '',
-            'improvements': reason,
             'suggestion': 'Write enough relevant language to answer all required points before time ends.',
-            'zero_reason': reason,
-        }
+        })
+        return base
 
-    return {
+    base.update({
         'score_content': 0,
         'score_communicative': 0,
         'score_organisation': 0,
         'score_language': 0,
         'total': 0,
+        'suggestion': 'Write a complete response with relevant content and enough supporting language to allow assessment.',
+    })
+    return base
+
+
+# Maps v2 criterion names to legacy DB columns. Order matters within each task.
+TASK1_CRITERIA = {
+    'Content & Communicative Achievement': 'score_content',
+    'Language & Organisation': 'score_language',
+}
+
+TASK2_CRITERIA = {
+    'Content & Communicative Achievement': 'score_content',
+    'Organisation': 'score_communicative',  # legacy column reused for organisation
+    'Vocabulary': 'score_organisation',     # legacy column reused for vocabulary
+    'Grammar': 'score_language',            # legacy column reused for grammar
+}
+
+
+def _build_legacy_strings_from_v2(data):
+    well_done = (data.get('wellDone') or '').strip()
+    practice_task = (data.get('practiceTask') or '').strip()
+    improvements_list = data.get('improvements') or []
+    improvement_lines = []
+    for item in improvements_list:
+        if not isinstance(item, dict):
+            continue
+        action = (item.get('action') or '').strip()
+        why = (item.get('why') or '').strip()
+        before = (item.get('before') or '').strip()
+        after = (item.get('after') or '').strip()
+        line = action
+        if why:
+            line = f'{line} — {why}' if line else why
+        if before and after:
+            line = f'{line} (e.g. "{before}" → "{after}")' if line else f'"{before}" → "{after}"'
+        if line:
+            improvement_lines.append(line)
+    return {
+        'strengths': well_done,
+        'improvements': '\n\n'.join(improvement_lines),
+        'suggestion': practice_task,
+    }
+
+
+def _normalise_v2_writing_result(response, data):
+    """Map the FET v2 JSON payload to the dict mark_writing_response persists."""
+    part = getattr(response.question, 'part', None)
+    criteria_map = TASK1_CRITERIA if part == 1 else TASK2_CRITERIA
+
+    score_columns = {
+        'score_content': None if part == 1 else 0,
+        'score_communicative': None if part == 1 else 0,
+        'score_organisation': None if part == 1 else 0,
+        'score_language': 0,
+    }
+    if part == 1:
+        score_columns['score_content'] = 0
+
+    seen_criteria = []
+    for criterion in (data.get('criteria') or []):
+        if not isinstance(criterion, dict):
+            continue
+        name = (criterion.get('name') or '').strip()
+        column = criteria_map.get(name)
+        if not column:
+            continue
+        score_columns[column] = _clamp_score(criterion.get('score'))
+        seen_criteria.append({
+            'name': name,
+            'score': score_columns[column],
+            'maxScore': 5,
+        })
+
+    total = sum((value or 0) for value in score_columns.values() if value is not None)
+    if isinstance(data.get('totalScore'), (int, float)):
+        # Trust the model's total only when criteria add up to it; otherwise rely on summed columns.
+        ai_total = int(data.get('totalScore'))
+        if abs(ai_total - total) <= 1:
+            total = ai_total
+
+    legacy_text = _build_legacy_strings_from_v2(data)
+
+    sanitised_improvements = []
+    for item in (data.get('improvements') or [])[:3]:
+        if not isinstance(item, dict):
+            continue
+        sanitised_improvements.append({
+            'criterionName': (item.get('criterionName') or '').strip(),
+            'marksGained': _clamp_score(item.get('marksGained'), maximum=5),
+            'action': (item.get('action') or '').strip(),
+            'why': (item.get('why') or '').strip(),
+            'before': (item.get('before') or '').strip(),
+            'after': (item.get('after') or '').strip(),
+            'arabicExplanation': (item.get('arabicExplanation') or None),
+        })
+
+    student_level = (data.get('studentLevel') or '').strip().upper()
+    if student_level not in {'A1', 'A2', 'B1', 'B2'}:
+        student_level = ''
+
+    max_score = 10 if part == 1 else 20
+    potential_raw = data.get('potentialScore')
+    try:
+        potential_score = max(int(total), min(max_score, int(potential_raw))) if potential_raw is not None else None
+    except (TypeError, ValueError):
+        potential_score = None
+
+    feedback_json = {
+        'studentLevel': student_level,
+        'totalScore': int(total),
+        'maxScore': max_score,
+        'potentialScore': potential_score,
+        'wellDone': (data.get('wellDone') or '').strip(),
+        'criteria': seen_criteria or [],
+        'improvements': sanitised_improvements,
+        'practiceTask': (data.get('practiceTask') or '').strip(),
+    }
+
+    return {
+        'score_content': score_columns['score_content'],
+        'score_communicative': score_columns['score_communicative'],
+        'score_organisation': score_columns['score_organisation'],
+        'score_language': score_columns['score_language'],
+        'total': int(total),
         'band': '',
         'cefr': '',
-        'strengths': '',
-        'improvements': reason,
-        'suggestion': 'Write a complete response with relevant content and enough supporting language to allow assessment.',
-        'zero_reason': reason,
+        'strengths': legacy_text['strengths'],
+        'improvements': legacy_text['improvements'],
+        'suggestion': legacy_text['suggestion'],
+        'zero_reason': '',
+        'student_level': student_level,
+        'potential_score': potential_score,
+        'well_done': feedback_json['wellDone'],
+        'practice_task': feedback_json['practiceTask'],
+        'feedback_json': feedback_json,
     }
 
 
 def _normalise_writing_result(response, data):
+    """Dispatch to v2 (new schema) or v1 (legacy) based on payload shape."""
+    if isinstance(data, dict) and ('criteria' in data or 'wellDone' in data or 'studentLevel' in data):
+        return _normalise_v2_writing_result(response, data)
+
+    # Legacy v1 path — kept for backwards compatibility with non-FET prompts.
     scores = data.get('scores', {}) or {}
+    legacy = _empty_v2_payload()
 
     if getattr(response.question, 'part', None) == 1:
         score_content = _clamp_score(scores.get('content_communicative'))
         score_language = _clamp_score(scores.get('language_organisation'))
         total = score_content + score_language
-        return {
+        result = {
             'score_content': score_content,
             'score_communicative': None,
             'score_organisation': None,
@@ -171,6 +527,8 @@ def _normalise_writing_result(response, data):
             'suggestion': (data.get('suggestion') or '').strip(),
             'zero_reason': (data.get('zero_reason') or '').strip(),
         }
+        result.update(legacy)
+        return result
 
     if getattr(response.question, 'part', None) == 2:
         score_content = _clamp_score(scores.get('content_communicative'))
@@ -178,7 +536,7 @@ def _normalise_writing_result(response, data):
         score_organisation = _clamp_score(scores.get('vocabulary'))
         score_language = _clamp_score(scores.get('grammar'))
         total = score_content + score_communicative + score_organisation + score_language
-        return {
+        result = {
             'score_content': score_content,
             'score_communicative': score_communicative,
             'score_organisation': score_organisation,
@@ -191,13 +549,15 @@ def _normalise_writing_result(response, data):
             'suggestion': (data.get('suggestion') or '').strip(),
             'zero_reason': (data.get('zero_reason') or '').strip(),
         }
+        result.update(legacy)
+        return result
 
     if getattr(response.attempt.exam, 'exam_family', '') == 'fet':
         if response.question.part == 1:
             score_content = _clamp_score(scores.get('content_communicative'))
             score_language = _clamp_score(scores.get('language_organisation'))
             total = score_content + score_language
-            return {
+            result = {
                 'score_content': score_content,
                 'score_communicative': None,
                 'score_organisation': None,
@@ -210,13 +570,15 @@ def _normalise_writing_result(response, data):
                 'suggestion': (data.get('suggestion') or '').strip(),
                 'zero_reason': (data.get('zero_reason') or '').strip(),
             }
+            result.update(legacy)
+            return result
 
         score_content = _clamp_score(scores.get('content_communicative'))
         score_communicative = _clamp_score(scores.get('organisation'))
         score_organisation = _clamp_score(scores.get('vocabulary'))
         score_language = _clamp_score(scores.get('grammar'))
         total = score_content + score_communicative + score_organisation + score_language
-        return {
+        result = {
             'score_content': score_content,
             'score_communicative': score_communicative,
             'score_organisation': score_organisation,
@@ -229,8 +591,10 @@ def _normalise_writing_result(response, data):
             'suggestion': (data.get('suggestion') or '').strip(),
             'zero_reason': (data.get('zero_reason') or '').strip(),
         }
+        result.update(legacy)
+        return result
 
-    return {
+    fallback = {
         'score_content': scores.get('content'),
         'score_communicative': scores.get('communicative'),
         'score_organisation': scores.get('organisation'),
@@ -243,6 +607,8 @@ def _normalise_writing_result(response, data):
         'suggestion': data.get('suggestion', ''),
         'zero_reason': data.get('zero_reason', ''),
     }
+    fallback.update(legacy)
+    return fallback
 
 
 def _soften_borderline_writing_scores(response, normalised):
@@ -309,7 +675,7 @@ def mark_writing_response(self, response_id):
             client = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
             result = client.messages.create(
                 model='claude-sonnet-4-20250514',
-                max_tokens=1000,
+                max_tokens=1800,
                 system=_build_writing_system_prompt(response, use_rubric_prompt),
                 messages=[{'role': 'user', 'content': prompt}]
             )
@@ -362,6 +728,11 @@ def mark_writing_response(self, response_id):
             response.improvements = normalised['improvements']
             response.suggestion = normalised['suggestion']
             response.zero_reason = normalised['zero_reason']
+            response.student_level = normalised.get('student_level', '') or ''
+            response.potential_score = normalised.get('potential_score')
+            response.well_done = normalised.get('well_done', '') or ''
+            response.practice_task = normalised.get('practice_task', '') or ''
+            response.feedback_json = normalised.get('feedback_json') or {}
             response.mark_status = 'done'
             response.marked_at = timezone.now()
             update_fields = [
@@ -376,6 +747,11 @@ def mark_writing_response(self, response_id):
                 'improvements',
                 'suggestion',
                 'zero_reason',
+                'student_level',
+                'potential_score',
+                'well_done',
+                'practice_task',
+                'feedback_json',
                 'mark_status',
                 'marked_at',
             ]

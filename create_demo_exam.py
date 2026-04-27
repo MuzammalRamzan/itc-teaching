@@ -112,13 +112,24 @@ def main():
                 "signs": [
                     {
                         "text": "No Entry",
-                        "options": ["You cannot go in here", "You must pay here", "You can park here"],
+                        "optA": "You cannot go in here",
+                        "optB": "You must pay here",
+                        "optC": "You can park here",
                         "answer": "A",
                     },
                     {
                         "text": "Keep Off The Grass",
-                        "options": ["Sit here", "Do not walk on the grass", "Buy food here"],
+                        "optA": "Sit here",
+                        "optB": "Do not walk on the grass",
+                        "optC": "Buy food here",
                         "answer": "B",
+                    },
+                    {
+                        "text": "Staff Only",
+                        "optA": "Only workers may enter",
+                        "optB": "Customers must wait here",
+                        "optC": "Students should study here",
+                        "answer": "A",
                     },
                 ]
             },
@@ -130,15 +141,17 @@ def main():
             has_content=True,
             content={
                 "people": [
-                    {"name": "Ahmed", "need": "He wants to exercise after work."},
-                    {"name": "Sara", "need": "She wants to learn something creative."},
+                    {"name": "Ahmed", "desc": "He wants to exercise after work and needs a place open in the evening."},
+                    {"name": "Sara", "desc": "She wants to learn something creative at the weekend."},
+                    {"name": "Mona", "desc": "She wants an activity where she can watch a film with friends."},
                 ],
-                "texts": [
-                    {"label": "A", "text": "Gym: Open until 11pm. Fitness classes available."},
-                    {"label": "B", "text": "Art Club: Weekend drawing and painting lessons."},
-                    {"label": "C", "text": "Cinema: New movies every week."},
+                "activities": [
+                    {"id": "A", "title": "City Gym", "text": "Open until 11pm every day. Fitness classes and modern equipment."},
+                    {"id": "B", "title": "Weekend Art Club", "text": "Saturday drawing and painting lessons for beginners."},
+                    {"id": "C", "title": "Moonlight Cinema", "text": "New films every week with evening shows and group tickets."},
+                    {"id": "D", "title": "Book Corner", "text": "A quiet place to read magazines and borrow books."},
                 ],
-                "answers": ["A", "B"],
+                "answers": ["A", "B", "C"],
             },
         )
 
@@ -149,9 +162,9 @@ def main():
             content={
                 "passage": "Sara moved to a new city last year. At first she felt nervous, but she joined a sports club and made new friends. Now she enjoys living there.",
                 "statements": [
-                    {"text": "Sara moved last year.", "answer": True},
-                    {"text": "Sara felt confident from the first day.", "answer": False},
-                    {"text": "Sara made friends by joining a club.", "answer": True},
+                    {"text": "Sara moved last year.", "answer": "T"},
+                    {"text": "Sara felt confident from the first day.", "answer": "F"},
+                    {"text": "Sara made friends by joining a club.", "answer": "T"},
                 ],
             },
         )
@@ -161,16 +174,31 @@ def main():
             part_number=4,
             has_content=True,
             content={
-                "article": "Many students learn English online. Some use videos, others use apps. Practising every day helps people improve faster.",
+                "title": "Learning English Online",
+                "passage": "Many students learn English online. Some use videos, others use apps. Teachers often say that practising a little every day helps people improve faster. Students can also join online speaking groups to build confidence and use new vocabulary in real conversations.",
                 "questions": [
                     {
-                        "question": "What is the text mainly about?",
-                        "options": ["Learning English online", "Travelling abroad", "Cooking food", "Playing sports"],
+                        "text": "What is the text mainly about?",
+                        "optA": "Learning English online",
+                        "optB": "Travelling abroad",
+                        "optC": "Cooking food",
+                        "optD": "Playing sports",
                         "answer": "A",
                     },
                     {
-                        "question": "What helps people improve faster?",
-                        "options": ["Practising every day", "Studying once a month", "Not using apps", "Watching no videos"],
+                        "text": "What helps people improve faster?",
+                        "optA": "Practising every day",
+                        "optB": "Studying once a month",
+                        "optC": "Not using apps",
+                        "optD": "Watching no videos",
+                        "answer": "A",
+                    },
+                    {
+                        "text": "Why do students join online speaking groups?",
+                        "optA": "To avoid homework",
+                        "optB": "To build confidence",
+                        "optC": "To learn cooking",
+                        "optD": "To travel abroad",
                         "answer": "A",
                     },
                 ],
@@ -182,10 +210,10 @@ def main():
             part_number=5,
             has_content=True,
             content={
-                "text": "I ____ to school every day. My friend ____ the bus.",
+                "text": "I [1] to school every day. My friend [2] the bus because he lives far away.",
                 "blanks": [
-                    {"options": ["go", "goes", "gone", "going"], "answer": "A"},
-                    {"options": ["take", "takes", "took", "taking"], "answer": "B"},
+                    {"optA": "go", "optB": "goes", "optC": "gone", "optD": "going", "answer": "A"},
+                    {"optA": "take", "optB": "takes", "optC": "took", "optD": "taking", "answer": "B"},
                 ],
             },
         )
