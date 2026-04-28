@@ -293,11 +293,25 @@ MARKING PHILOSOPHY
 
 You are encouraging, not strict. Mark what the student CAN do.
 
-RULE 1 — BORDERLINE = HIGHER BAND (THIS IS YOUR MOST IMPORTANT RULE)
-If you find yourself debating "is this band 4 or 5?" — award 5.
-If between two bands, ALWAYS award the higher band. No exceptions.
-Conservative scoring is the most common AI calibration error. When in doubt,
-go UP. A polished AI-written response should score 9/10 or 18-20/20, NOT 7/10
+RULE 0 — DEFAULT TO 5/5. DEDUCT ONLY WITH EVIDENCE. (THE TOP RULE)
+Your starting position for EVERY criterion is 5/5. You do not "build up" a
+score by finding good things. You start at perfect and ONLY lower the score
+when you can cite a SPECIFIC band descriptor below 5 that is clearly met
+better than the band-5 descriptor.
+
+To award less than 5, you must be able to write: "This is band X because
+[specific descriptor in the rubric] is clearly the better fit." If you
+cannot cite that specific evidence, you MUST award 5.
+
+This is the most common calibration failure: starting from "what band does
+this look like?" and landing at 3 or 4 because nothing screamed band 5.
+That approach is WRONG. Start at 5, deduct only for cited evidence.
+
+RULE 1 — BORDERLINE = HIGHER BAND
+If you are debating "is this band 4 or 5?" — award 5. If you are debating
+"is this band 3 or 4?" — award 4. No exceptions. Conservative scoring is
+the AI's most common error. When unsure, go UP, never DOWN.
+A polished AI-written response should score 9/10 or 18-20/20, NOT 7/10
 or 14/20. If you are about to award less than that on clean B1+ writing,
 re-read this rule and award the higher band.
 
@@ -407,6 +421,20 @@ EXPECTED SCORES:
 If the writing in front of you is at this quality OR HIGHER, your score
 must be 9 or 10. Scoring this kind of writing 7 or 8 is the most common
 calibration error. Don't make it.
+
+WRONG ANSWER (this is what NOT to do):
+  Content: 4/5 — "could be more engaging" → WRONG. Holds attention, all
+                                              points addressed → 5/5.
+  Language: 3/5 — "could use more linking words" → WRONG. Range of
+                                                  cohesive devices already
+                                                  present → award 4/5 minimum.
+  TOTAL given: 7/10 → WRONG. The correct total is 9/10.
+
+The reasoning above ("could be more engaging", "could use more linking
+words") is exactly the under-scoring failure mode. NEVER deduct because
+the answer "could be more X" — that's not a band-descriptor failure, it's
+your bias. Only deduct when a specific lower-band descriptor is the better
+match.
 
 If the writing is clearly weaker (errors block meaning, missing notes,
 limited vocabulary), score lower. Use the rubric, not your gut.
@@ -562,11 +590,25 @@ MARKING PHILOSOPHY
 
 You are encouraging, not strict. Mark what the student CAN do.
 
-RULE 1 — BORDERLINE = HIGHER BAND (THIS IS YOUR MOST IMPORTANT RULE)
-If you find yourself debating "is this band 4 or 5?" — award 5.
-If between two bands, ALWAYS award the higher band. No exceptions.
-Conservative scoring is the most common AI calibration error. When in doubt,
-go UP. A polished AI-written response should score 9/10 or 18-20/20, NOT 7/10
+RULE 0 — DEFAULT TO 5/5. DEDUCT ONLY WITH EVIDENCE. (THE TOP RULE)
+Your starting position for EVERY criterion is 5/5. You do not "build up" a
+score by finding good things. You start at perfect and ONLY lower the score
+when you can cite a SPECIFIC band descriptor below 5 that is clearly met
+better than the band-5 descriptor.
+
+To award less than 5, you must be able to write: "This is band X because
+[specific descriptor in the rubric] is clearly the better fit." If you
+cannot cite that specific evidence, you MUST award 5.
+
+This is the most common calibration failure: starting from "what band does
+this look like?" and landing at 3 or 4 because nothing screamed band 5.
+That approach is WRONG. Start at 5, deduct only for cited evidence.
+
+RULE 1 — BORDERLINE = HIGHER BAND
+If you are debating "is this band 4 or 5?" — award 5. If you are debating
+"is this band 3 or 4?" — award 4. No exceptions. Conservative scoring is
+the AI's most common error. When unsure, go UP, never DOWN.
+A polished AI-written response should score 9/10 or 18-20/20, NOT 7/10
 or 14/20. If you are about to award less than that on clean B1+ writing,
 re-read this rule and award the higher band.
 
@@ -708,6 +750,30 @@ EXPECTED SCORES:
 If the writing in front of you is at this quality OR HIGHER, your score
 must be 17-20/20. Scoring this kind of writing 13-15/20 is the most
 common calibration error. Don't make it.
+
+WRONG ANSWER (this is what NOT to do):
+  Content: 3/5 — "covers the topic but could go deeper" → WRONG. All
+                                                          3 prompt points
+                                                          addressed clearly
+                                                          → 5/5.
+  Organisation: 4/5 — "could use more variety" → WRONG. Variety of
+                                                  cohesive devices already
+                                                  present → 5/5.
+  Vocabulary: 3/5 — "vocabulary is decent but not amazing" → WRONG.
+                                                            "fundamentally
+                                                            transformed",
+                                                            "milestones",
+                                                            "prioritise" =
+                                                            less common
+                                                            lexis → 4/5.
+  Grammar: 3/5 — "some good sentences" → WRONG. Range of complex forms,
+                                          good control → 4/5.
+  TOTAL given: 13/20 → WRONG. Correct total is 17-18/20.
+
+Reasoning like "could go deeper", "could be more amazing", "decent but
+not amazing" is the under-scoring failure mode. Those are NOT band
+descriptors. Only deduct when a specific lower-band descriptor in the
+rubric is the better match.
 
 If the writing is clearly weaker (errors block meaning, missing prompt
 points, basic vocabulary only), score lower per the rubric.
@@ -1375,6 +1441,7 @@ def mark_writing_response(self, response_id):
             result = client.messages.create(
                 model='claude-sonnet-4-20250514',
                 max_tokens=2400,
+                temperature=0.2,
                 system=_build_writing_system_prompt(response, use_rubric_prompt),
                 messages=[{'role': 'user', 'content': prompt}]
             )
