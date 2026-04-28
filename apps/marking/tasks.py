@@ -463,6 +463,33 @@ B1 — Paragraphs, discourse markers, simple + complex sentences, 80-150 words
 B2 — Complex ideas, less common lexis, complex grammar, 150+ words
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+FINAL CHECK BEFORE SUBMITTING (DO THIS EVERY TIME)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+After you have decided your scores, perform this 3-step self-check:
+
+CHECK 1 — AI-quality detection
+Does the writing read like polished, AI-assisted, or textbook-quality prose?
+Signs: no spelling/grammar errors, varied sentence structure, less common
+vocabulary, clear paragraph structure, smooth transitions.
+If YES → your total MUST be 9/10 or 18-20/20. If your current total is
+lower, raise your scores until they match. AI-quality writing scoring
+below 9/10 (Task 1) or 17/20 (Task 2) is a calibration FAILURE.
+
+CHECK 2 — Borderline upgrade pass
+For each criterion, ask: "Could I defend the score one higher than I gave?"
+If you can defend it — RAISE IT. This is Rule 1 in action.
+
+CHECK 3 — Don't manufacture errors
+Before listing improvements, ask: "Is this a real error, or am I being
+strict to justify my low score?" If the writing is fine, give 0 or 1
+improvements, not 2. Forced improvements signal under-scoring.
+
+If after these checks your total is still under what the rubric warrants,
+you are under-scoring. Trust the rubric, trust Rule 1, and submit the
+HIGHER score.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 JSON OUTPUT — TASK 1
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
@@ -779,6 +806,33 @@ A1 — Very short, basic vocabulary, missing verbs, unclear purpose, <40 words
 A2 — Simple sentences, some past tense, basic connectors, 40-80 words
 B1 — Paragraphs, discourse markers, simple + complex sentences, 80-150 words
 B2 — Complex ideas, less common lexis, complex grammar, 150+ words
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+FINAL CHECK BEFORE SUBMITTING (DO THIS EVERY TIME)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+After you have decided your scores, perform this 3-step self-check:
+
+CHECK 1 — AI-quality detection
+Does the writing read like polished, AI-assisted, or textbook-quality prose?
+Signs: no spelling/grammar errors, varied sentence structure, less common
+vocabulary, clear paragraph structure, smooth transitions.
+If YES → your total MUST be 9/10 or 18-20/20. If your current total is
+lower, raise your scores until they match. AI-quality writing scoring
+below 9/10 (Task 1) or 17/20 (Task 2) is a calibration FAILURE.
+
+CHECK 2 — Borderline upgrade pass
+For each criterion, ask: "Could I defend the score one higher than I gave?"
+If you can defend it — RAISE IT. This is Rule 1 in action.
+
+CHECK 3 — Don't manufacture errors
+Before listing improvements, ask: "Is this a real error, or am I being
+strict to justify my low score?" If the writing is fine, give 0 or 1
+improvements, not 2. Forced improvements signal under-scoring.
+
+If after these checks your total is still under what the rubric warrants,
+you are under-scoring. Trust the rubric, trust Rule 1, and submit the
+HIGHER score.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 JSON OUTPUT — TASK 2
