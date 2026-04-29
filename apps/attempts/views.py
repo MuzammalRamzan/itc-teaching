@@ -1,13 +1,13 @@
 import uuid
 
 from django.db import transaction
-from django.db.models import Q
+from django.db.models import Q, Count
 from django.utils import timezone
 from rest_framework import status
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
 
-from datetime import date
+from datetime import date, timedelta
 
 from apps.authentication.credits import create_credit_transaction
 from apps.exams.models import Exam, WritingQuestion, SpeakingPart
@@ -537,3 +537,235 @@ def calendar_event_admin_detail(request, event_id):
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
     event = serializer.save()
     return Response(CalendarEventAdminSerializer(event).data)
+
+
+# ── FET dashboard ──────────────────────────────────────────────────────────
+#
+# Aggregates a unified per-exam progress view from existing attempt + response
+# rows (no schema change). Powers the Duolingo-style dashboard at /dashboard.
+#
+# Per-exam progress is computed across all three skills:
+#   tasks_total = (writing tasks) + (reading parts with content) + (speaking
+#                 parts with content)
+#   tasks_done  = number of those the user has submitted at least once
+#
+# Response shape:
+#   {
+#     "user": { "name", "first_name" },
+#     "overall_progress": int,
+#     "continue_learning": null | { exam_id, exam_title, subtitle, tasks_done,
+#                                   tasks_total, pct, last_activity, skill_hint },
+#     "next_up": null | { same shape, no last_activity },
+#     "in_progress": [...],
+#     "completed": [...],
+#     "streak_days": int
+#   }
+
+
+def _compute_exam_progress_for_user(user):
+    """Returns a list of per-exam summaries, sorted by last_activity desc."""
+    from apps.exams.models import ReadingPart  # local import to avoid cycles
+    from collections import defaultdict
+
+    # Pull all admin-active exams once.
+    exams = list(Exam.objects.filter(is_active=True, is_deleted=False).order_by('-created_at'))
+
+    # Map exam_id → totals for each skill.
+    writing_totals = defaultdict(int)
+    for q in WritingQuestion.objects.values('exam_id').annotate(c=Count('id')):
+        writing_totals[str(q['exam_id'])] = q['c']
+
+    reading_totals = defaultdict(int)
+    reading_parts_meta = defaultdict(set)  # exam_id → {part_numbers with content}
+    for rp in ReadingPart.objects.all():
+        if rp.has_content and getattr(rp, 'question_count', 0) > 0:
+            reading_parts_meta[str(rp.exam_id)].add(rp.part_number)
+    for ex_id, parts in reading_parts_meta.items():
+        reading_totals[ex_id] = len(parts)
+
+    speaking_totals = defaultdict(int)
+    for sp in SpeakingPart.objects.all():
+        if sp.has_content:
+            speaking_totals[str(sp.exam_id)] += 1
+
+    # All attempts for this user grouped by exam.
+    user_attempts = list(ExamAttempt.objects.filter(user=user).select_related('exam'))
+    attempts_by_exam = defaultdict(list)
+    for a in user_attempts:
+        attempts_by_exam[str(a.exam_id)].append(a)
+
+    # Build "completed parts" sets per exam.
+    writing_done = defaultdict(set)   # exam_id → {writing_question_id}
+    reading_done = defaultdict(set)   # exam_id → {part_number}
+    speaking_done = defaultdict(int)  # exam_id → count of speaking responses
+
+    last_activity = {}  # exam_id → datetime
+
+    for a in user_attempts:
+        ex_id = str(a.exam_id)
+        # Writing
+        for wr in a.writing_responses.all():
+            writing_done[ex_id].add(str(wr.question_id))
+            last_activity[ex_id] = max(last_activity.get(ex_id, wr.submitted_at), wr.submitted_at)
+        # Reading — collect part numbers from part_scores JSON
+        for rr in a.reading_responses.all():
+            for ps in (rr.part_scores or []):
+                pn = ps.get('part_number') if isinstance(ps, dict) else None
+                if pn is not None:
+                    reading_done[ex_id].add(int(pn))
+            last_activity[ex_id] = max(last_activity.get(ex_id, rr.submitted_at), rr.submitted_at)
+        # Speaking — coarse: each response = 1 speaking part touched
+        speaking_done[ex_id] += a.speaking_responses.count()
+        for sr in a.speaking_responses.all():
+            last_activity[ex_id] = max(last_activity.get(ex_id, sr.submitted_at), sr.submitted_at)
+
+    summaries = []
+    for ex in exams:
+        ex_id = str(ex.id)
+        w_total = writing_totals.get(ex_id, 0)
+        r_total = reading_totals.get(ex_id, 0)
+        s_total = speaking_totals.get(ex_id, 0)
+        tasks_total = w_total + r_total + s_total
+        if tasks_total == 0:
+            continue  # exam has no content — skip from dashboard
+
+        w_done = len(writing_done.get(ex_id, set()))
+        r_done = len(reading_done.get(ex_id, set()))
+        s_done = min(speaking_done.get(ex_id, 0), s_total)
+        tasks_done = w_done + r_done + s_done
+
+        pct = round((tasks_done / tasks_total) * 100) if tasks_total else 0
+        if pct >= 100:
+            status_label = 'completed'
+        elif tasks_done > 0:
+            status_label = 'in_progress'
+        else:
+            status_label = 'not_started'
+
+        # Pick a subtitle — prefer first writing question label, else exam description
+        subtitle = (ex.description or '').strip()
+        if not subtitle and w_total > 0:
+            first_q = WritingQuestion.objects.filter(exam=ex).order_by('order', 'part').first()
+            if first_q and first_q.label:
+                subtitle = first_q.label
+
+        # Skill hint: which skill has the most progress / most content
+        if w_total >= r_total and w_total >= s_total:
+            skill_hint = 'writing'
+        elif r_total >= s_total:
+            skill_hint = 'reading'
+        else:
+            skill_hint = 'speaking'
+
+        # Per-skill breakdown so the dashboard can show "Writing 2/2 ✓,
+        # Reading 3/6, Speaking 0/4" chips on every card.
+        skills = {
+            'writing': {
+                'done': min(w_done, w_total), 'total': w_total,
+                'has_content': w_total > 0,
+                'pct': round((w_done / w_total) * 100) if w_total else 0,
+                'status': 'completed' if w_total and w_done >= w_total else 'in_progress' if w_done > 0 else 'not_started',
+            },
+            'reading': {
+                'done': min(r_done, r_total), 'total': r_total,
+                'has_content': r_total > 0,
+                'pct': round((r_done / r_total) * 100) if r_total else 0,
+                'status': 'completed' if r_total and r_done >= r_total else 'in_progress' if r_done > 0 else 'not_started',
+            },
+            'speaking': {
+                'done': min(s_done, s_total), 'total': s_total,
+                'has_content': s_total > 0,
+                'pct': round((s_done / s_total) * 100) if s_total else 0,
+                'status': 'completed' if s_total and s_done >= s_total else 'in_progress' if s_done > 0 else 'not_started',
+            },
+        }
+
+        # Pick the "next skill to resume" — first skill with content that
+        # isn't finished. Order: writing → reading → speaking. The Resume
+        # CTA on the dashboard sends the user straight into this skill flow.
+        next_skill = None
+        for sk in ('writing', 'reading', 'speaking'):
+            if skills[sk]['has_content'] and skills[sk]['status'] != 'completed':
+                next_skill = sk
+                break
+
+        last_act = last_activity.get(ex_id)
+        summaries.append({
+            'exam_id': ex_id,
+            'exam_title': ex.title or 'Untitled exam',
+            'subtitle': subtitle[:140] if subtitle else '',
+            'tasks_done': tasks_done,
+            'tasks_total': tasks_total,
+            'pct': pct,
+            'status': status_label,
+            'skill_hint': skill_hint,
+            'skills': skills,
+            'next_skill': next_skill,
+            'last_activity': last_act.isoformat() if last_act else None,
+            'has_writing_content': w_total > 0,
+            'has_reading_content': r_total > 0,
+            'has_speaking_content': s_total > 0,
+        })
+
+    # Sort: most-recent activity first, then not-started exams after
+    summaries.sort(
+        key=lambda s: (s['last_activity'] or '', s['exam_title']),
+        reverse=True,
+    )
+    return summaries
+
+
+def _streak_days_for_user(user):
+    """Counts consecutive days (ending today) the user has submitted anything."""
+    today = timezone.now().date()
+    activity_dates = set()
+    for ts in WritingResponse.objects.filter(attempt__user=user).values_list('submitted_at', flat=True):
+        if ts: activity_dates.add(ts.date())
+    for ts in ReadingResponse.objects.filter(attempt__user=user).values_list('submitted_at', flat=True):
+        if ts: activity_dates.add(ts.date())
+    for ts in SpeakingResponse.objects.filter(attempt__user=user).values_list('submitted_at', flat=True):
+        if ts: activity_dates.add(ts.date())
+    if not activity_dates: return 0
+    streak = 0
+    cur = today
+    while cur in activity_dates:
+        streak += 1
+        cur = cur - timedelta(days=1)
+    return streak
+
+
+@api_view(['GET'])
+def fet_dashboard(request):
+    user = request.user
+    if not user.is_authenticated:
+        return Response({'detail': 'Authentication required.'}, status=status.HTTP_401_UNAUTHORIZED)
+
+    summaries = _compute_exam_progress_for_user(user)
+    in_progress = [s for s in summaries if s['status'] == 'in_progress']
+    completed = [s for s in summaries if s['status'] == 'completed']
+    not_started = [s for s in summaries if s['status'] == 'not_started']
+
+    # Continue learning — most recent in-progress.
+    continue_learning = in_progress[0] if in_progress else None
+
+    # Next up — first not-started exam (admin order). None if everything started.
+    next_up = not_started[0] if not_started else None
+
+    # Overall progress = avg pct across all exams that have any content.
+    if summaries:
+        overall = round(sum(s['pct'] for s in summaries) / len(summaries))
+    else:
+        overall = 0
+
+    name = (getattr(user, 'name', '') or '').strip() or (user.email or '').split('@')[0]
+    first_name = name.split(' ')[0] if name else 'there'
+
+    return Response({
+        'user': {'name': name, 'first_name': first_name},
+        'overall_progress': overall,
+        'continue_learning': continue_learning,
+        'next_up': next_up,
+        'in_progress': in_progress,
+        'completed': completed,
+        'streak_days': _streak_days_for_user(user),
+    })
