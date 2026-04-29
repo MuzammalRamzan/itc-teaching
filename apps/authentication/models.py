@@ -156,6 +156,10 @@ class LandingPageSetting(models.Model):
     primary_cta_en = models.CharField(max_length=200, blank=True, default='')
     secondary_cta_ar = models.CharField(max_length=200, blank=True, default='')
     secondary_cta_en = models.CharField(max_length=200, blank=True, default='')
+    # Section availability — admin-controlled toggles for the section picker
+    writing_enabled = models.BooleanField(default=True)
+    reading_enabled = models.BooleanField(default=False)
+    speaking_enabled = models.BooleanField(default=False)
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:

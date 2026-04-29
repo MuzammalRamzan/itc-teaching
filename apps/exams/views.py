@@ -396,6 +396,83 @@ def update_reading_part(request, exam_id, part_number):
 
 @api_view(['POST'])
 @parser_classes([JSONParser])
+def import_reading_content(request, exam_id):
+    """Bulk-import all reading parts from a single JSON payload.
+
+    Body shape (any subset of parts may be omitted — only provided parts get
+    updated, others left untouched):
+
+        {
+          "parts": {
+            "1": { "signs": [ ... ] },
+            "2": { "people": [...], "texts": [...], "answers": [...] },
+            "3": { "passage": "...", "statements": [...] },
+            "4": { "article": "...", "questions": [...] },
+            "5": { "passage": "...", "blanks": [...] },
+            "6": { "passage": "...", "answers": [...] }
+          }
+        }
+    """
+    if not _admin_only(request):
+        return Response({'error': 'Admin only'}, status=status.HTTP_403_FORBIDDEN)
+    try:
+        exam = Exam.objects.get(id=exam_id, is_deleted=False)
+    except Exam.DoesNotExist:
+        return Response({'error': 'Exam not found'}, status=status.HTTP_404_NOT_FOUND)
+
+    payload = request.data
+    if not isinstance(payload, dict):
+        return Response({'error': 'Payload must be a JSON object.'}, status=status.HTTP_400_BAD_REQUEST)
+    parts_payload = payload.get('parts')
+    if not isinstance(parts_payload, dict):
+        return Response({'error': 'Payload must include a "parts" object keyed by part number (1–6).'}, status=status.HTTP_400_BAD_REQUEST)
+
+    updated = []
+    skipped = []
+    errors = {}
+
+    for part_key, content in parts_payload.items():
+        # Accept "1" / 1 / "part1" / "Part 1" — extract the int.
+        try:
+            num = int(str(part_key).strip().lower().replace('part', '').replace(' ', ''))
+        except ValueError:
+            errors[str(part_key)] = 'Invalid part key — must be 1, 2, 3, 4, 5, or 6.'
+            continue
+        if num < 1 or num > 6:
+            errors[str(part_key)] = 'Part number must be between 1 and 6.'
+            continue
+        if not isinstance(content, dict):
+            errors[str(num)] = 'Content for this part must be a JSON object.'
+            continue
+
+        part, _created = ReadingPart.objects.get_or_create(
+            exam=exam, part_number=num, defaults={'content': {}, 'has_content': False},
+        )
+        part.content = content
+        part.has_content = bool(content)
+        part.save()
+        updated.append({
+            'part_number': num,
+            'has_content': part.has_content,
+            'question_count': part.question_count,
+        })
+
+    # List parts not touched so the admin sees what stayed the same.
+    for p in ReadingPart.objects.filter(exam=exam):
+        if not any(u['part_number'] == p.part_number for u in updated):
+            skipped.append({'part_number': p.part_number, 'has_content': p.has_content, 'question_count': p.question_count})
+
+    _sync_exam_activation(exam)
+    return Response({
+        'message': f'Imported reading content for {len(updated)} part(s).',
+        'updated': updated,
+        'skipped': skipped,
+        'errors': errors or None,
+    })
+
+
+@api_view(['POST'])
+@parser_classes([JSONParser])
 def import_fet_exam(request):
     if not _admin_only(request):
         return Response({'error': 'Admin only'}, status=status.HTTP_403_FORBIDDEN)

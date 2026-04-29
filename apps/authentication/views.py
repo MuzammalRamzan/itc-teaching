@@ -338,6 +338,11 @@ def get_landing_setting(app_key):
             'ar': (setting.secondary_cta_ar if setting else '') or defaults.get('secondary_cta_ar', ''),
             'en': (setting.secondary_cta_en if setting else '') or defaults.get('secondary_cta_en', ''),
         },
+        'sections': {
+            'writing': bool(setting.writing_enabled) if setting else defaults.get('writing_enabled', True),
+            'reading': bool(setting.reading_enabled) if setting else defaults.get('reading_enabled', False),
+            'speaking': bool(setting.speaking_enabled) if setting else defaults.get('speaking_enabled', False),
+        },
     }
 
 
@@ -898,6 +903,12 @@ def landing_admin_detail(request):
     setting.primary_cta_en = request.data.get('primary_cta_en', setting.primary_cta_en)
     setting.secondary_cta_ar = request.data.get('secondary_cta_ar', setting.secondary_cta_ar)
     setting.secondary_cta_en = request.data.get('secondary_cta_en', setting.secondary_cta_en)
+    if 'writing_enabled' in request.data:
+        setting.writing_enabled = bool(request.data.get('writing_enabled'))
+    if 'reading_enabled' in request.data:
+        setting.reading_enabled = bool(request.data.get('reading_enabled'))
+    if 'speaking_enabled' in request.data:
+        setting.speaking_enabled = bool(request.data.get('speaking_enabled'))
     setting.save()
     return Response({
         'message': 'Landing settings updated successfully.',
