@@ -567,8 +567,19 @@ def _compute_exam_progress_for_user(user):
     from apps.exams.models import ReadingPart  # local import to avoid cycles
     from collections import defaultdict
 
-    # Pull all admin-active exams once.
-    exams = list(Exam.objects.filter(is_active=True, is_deleted=False).order_by('-created_at'))
+    # Pull every admin-active exam — both family='general' and family='fet' —
+    # so the dashboard shows the full set of papers a student can work on.
+    # Filtering by family was dropping exams the user expected to see here.
+    exams_qs = Exam.objects.filter(
+        is_active=True, is_deleted=False,
+    ).order_by('-created_at')
+    # Defensive dedupe by id (in case a future migration introduces dupes).
+    seen_exam_ids = set()
+    exams = []
+    for ex in exams_qs:
+        if ex.id in seen_exam_ids: continue
+        seen_exam_ids.add(ex.id)
+        exams.append(ex)
 
     # Map exam_id → totals for each skill.
     writing_totals = defaultdict(int)
@@ -588,8 +599,14 @@ def _compute_exam_progress_for_user(user):
         if sp.has_content:
             speaking_totals[str(sp.exam_id)] += 1
 
-    # All attempts for this user grouped by exam.
-    user_attempts = list(ExamAttempt.objects.filter(user=user).select_related('exam'))
+    # All attempts for this user, with response rows prefetched in batch so
+    # we don't fire 3 queries per attempt as we iterate (N+1 → ~4 queries
+    # total regardless of attempt count). Critical for users with 100+ exams.
+    user_attempts = list(
+        ExamAttempt.objects.filter(user=user)
+        .select_related('exam')
+        .prefetch_related('writing_responses', 'reading_responses', 'speaking_responses')
+    )
     attempts_by_exam = defaultdict(list)
     for a in user_attempts:
         attempts_by_exam[str(a.exam_id)].append(a)
@@ -694,6 +711,7 @@ def _compute_exam_progress_for_user(user):
             'exam_id': ex_id,
             'exam_title': ex.title or 'Untitled exam',
             'subtitle': subtitle[:140] if subtitle else '',
+            'time_mins': int(getattr(ex, 'time_mins', 0) or 0),
             'tasks_done': tasks_done,
             'tasks_total': tasks_total,
             'pct': pct,
@@ -757,15 +775,137 @@ def fet_dashboard(request):
     else:
         overall = 0
 
+    # Average score (real exam scores, not task completion). Pulled from
+    # response rows that actually carry a percentage.
+    score_samples = []
+    for rr in ReadingResponse.objects.filter(attempt__user=user, percentage__isnull=False):
+        score_samples.append(rr.percentage)
+    for wr in WritingResponse.objects.filter(attempt__user=user, total__isnull=False):
+        # Writing total is out of 30 — convert to percentage.
+        if wr.total is not None:
+            score_samples.append(round((wr.total / 30) * 100))
+    average_score = round(sum(score_samples) / len(score_samples)) if score_samples else 0
+
+    # Current level — derived from average score, CEFR-style cut-offs.
+    if average_score >= 85:
+        current_level = {'cefr': 'C1', 'label': 'Advanced'}
+    elif average_score >= 70:
+        current_level = {'cefr': 'B2', 'label': 'Intermediate'}
+    elif average_score >= 55:
+        current_level = {'cefr': 'B1', 'label': 'Intermediate'}
+    elif average_score >= 40:
+        current_level = {'cefr': 'A2', 'label': 'Elementary'}
+    elif score_samples:
+        current_level = {'cefr': 'A1', 'label': 'Beginner'}
+    else:
+        current_level = {'cefr': '—', 'label': 'Not yet rated'}
+
+    # This week vs last week submissions.
+    today = timezone.now().date()
+    week_start = today - timedelta(days=today.weekday())  # Monday
+    last_week_start = week_start - timedelta(days=7)
+    this_week_count = 0
+    last_week_count = 0
+    daily_active = {i: False for i in range(7)}  # 0=Mon … 6=Sun
+    for ts in WritingResponse.objects.filter(attempt__user=user).values_list('submitted_at', flat=True):
+        if not ts: continue
+        d = ts.date()
+        if d >= week_start: this_week_count += 1
+        if last_week_start <= d < week_start: last_week_count += 1
+        if d >= week_start and (d - week_start).days < 7:
+            daily_active[(d - week_start).days] = True
+    for ts in ReadingResponse.objects.filter(attempt__user=user).values_list('submitted_at', flat=True):
+        if not ts: continue
+        d = ts.date()
+        if d >= week_start: this_week_count += 1
+        if last_week_start <= d < week_start: last_week_count += 1
+        if d >= week_start and (d - week_start).days < 7:
+            daily_active[(d - week_start).days] = True
+    for ts in SpeakingResponse.objects.filter(attempt__user=user).values_list('submitted_at', flat=True):
+        if not ts: continue
+        d = ts.date()
+        if d >= week_start: this_week_count += 1
+        if last_week_start <= d < week_start: last_week_count += 1
+        if d >= week_start and (d - week_start).days < 7:
+            daily_active[(d - week_start).days] = True
+    weekly_activity = [
+        {'label': lbl, 'active': daily_active[i]}
+        for i, lbl in enumerate(['M', 'T', 'W', 'T', 'F', 'S', 'S'])
+    ]
+
+    # Skill breakdown — avg pct per skill across all exams that have content
+    # for that skill (regardless of attempt status).
+    skill_totals = {'writing': 0, 'reading': 0, 'listening': 0, 'speaking': 0}
+    skill_counts = {'writing': 0, 'reading': 0, 'listening': 0, 'speaking': 0}
+    for s in summaries:
+        for sk in ('writing', 'reading', 'speaking'):
+            sub = s.get('skills', {}).get(sk, {})
+            if sub.get('has_content'):
+                skill_totals[sk] += sub.get('pct', 0)
+                skill_counts[sk] += 1
+    skill_breakdown = {
+        sk: {
+            'pct': round(skill_totals[sk] / skill_counts[sk]) if skill_counts[sk] else 0,
+            'has_content': skill_counts[sk] > 0,
+        }
+        for sk in ('writing', 'reading', 'listening', 'speaking')
+    }
+
+    # Achievements — derived from real activity, no hardcoding of state.
+    streak_days = _streak_days_for_user(user)
+    total_attempts = ExamAttempt.objects.filter(user=user).count()
+    achievements = [
+        {
+            'key': 'first_exam',
+            'title': 'First Exam',
+            'description': 'Completed your first exam',
+            'icon': '🏅',
+            'completed': len(completed) >= 1,
+        },
+        {
+            'key': 'streak_5',
+            'title': '5 Day Streak',
+            'description': 'Studied 5 days in a row',
+            'icon': '🔥',
+            'completed': streak_days >= 5,
+        },
+        {
+            'key': 'getting_started',
+            'title': 'Getting Started',
+            'description': 'Started your preparation journey',
+            'icon': '🚀',
+            'completed': total_attempts >= 1,
+        },
+        {
+            'key': 'three_exams',
+            'title': 'Triple Threat',
+            'description': 'Completed 3 different exams',
+            'icon': '🏆',
+            'completed': len(completed) >= 3,
+        },
+    ]
+
     name = (getattr(user, 'name', '') or '').strip() or (user.email or '').split('@')[0]
     first_name = name.split(' ')[0] if name else 'there'
+    initials = ''.join([p[0] for p in name.split(' ') if p][:2]).upper() or first_name[:2].upper()
 
     return Response({
-        'user': {'name': name, 'first_name': first_name},
+        'user': {'name': name, 'first_name': first_name, 'initials': initials, 'email': user.email or ''},
         'overall_progress': overall,
+        'average_score': average_score,
+        'current_level': current_level,
+        'this_week': {
+            'count': this_week_count,
+            'delta_vs_last_week': this_week_count - last_week_count,
+        },
         'continue_learning': continue_learning,
         'next_up': next_up,
         'in_progress': in_progress,
         'completed': completed,
-        'streak_days': _streak_days_for_user(user),
+        'not_started': not_started,
+        'all_exams': summaries,
+        'skill_breakdown': skill_breakdown,
+        'weekly_activity': weekly_activity,
+        'achievements': achievements,
+        'streak_days': streak_days,
     })
