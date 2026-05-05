@@ -581,10 +581,21 @@ def _compute_exam_progress_for_user(user):
         seen_exam_ids.add(ex.id)
         exams.append(ex)
 
-    # Map exam_id → totals for each skill.
-    writing_totals = defaultdict(int)
-    for q in WritingQuestion.objects.values('exam_id').annotate(c=Count('id')):
-        writing_totals[str(q['exam_id'])] = q['c']
+    # Writing tasks are counted at the PART level, not per-question. The
+    # writing exam has 2 parts: Part 1 (mandatory single question) and
+    # Part 2 (multiple topic options, the user picks ONE). So the per-exam
+    # writing total is "how many parts have at least one question" — never
+    # more than 2 — and a part is "done" when the user has submitted any
+    # response for any of that part's questions.
+    writing_parts_meta = defaultdict(set)  # exam_id → {1, 2}
+    for wq in WritingQuestion.objects.values('exam_id', 'part').distinct():
+        writing_parts_meta[str(wq['exam_id'])].add(int(wq['part']))
+    # Map exam_id → which question_id belongs to which part, so we can
+    # convert WritingResponse.question_id → part when building "done" set.
+    question_part_map = {}  # str(question_id) → int(part)
+    for wq in WritingQuestion.objects.values('id', 'part'):
+        question_part_map[str(wq['id'])] = int(wq['part'])
+    writing_totals = {ex_id: len(parts) for ex_id, parts in writing_parts_meta.items()}
 
     reading_totals = defaultdict(int)
     reading_parts_meta = defaultdict(set)  # exam_id → {part_numbers with content}
@@ -612,7 +623,7 @@ def _compute_exam_progress_for_user(user):
         attempts_by_exam[str(a.exam_id)].append(a)
 
     # Build "completed parts" sets per exam.
-    writing_done = defaultdict(set)   # exam_id → {writing_question_id}
+    writing_done = defaultdict(set)   # exam_id → {1, 2}  (writing PART numbers)
     reading_done = defaultdict(set)   # exam_id → {part_number}
     speaking_done = defaultdict(int)  # exam_id → count of speaking responses
 
@@ -620,9 +631,13 @@ def _compute_exam_progress_for_user(user):
 
     for a in user_attempts:
         ex_id = str(a.exam_id)
-        # Writing
+        # Writing — a part is "done" when the user has any response for any
+        # question in that part. Submitting Q1 marks Part 1 done; submitting
+        # any one of the Part 2 topic options marks Part 2 done.
         for wr in a.writing_responses.all():
-            writing_done[ex_id].add(str(wr.question_id))
+            part_num = question_part_map.get(str(wr.question_id))
+            if part_num is not None:
+                writing_done[ex_id].add(part_num)
             last_activity[ex_id] = max(last_activity.get(ex_id, wr.submitted_at), wr.submitted_at)
         # Reading — collect part numbers from part_scores JSON
         for rr in a.reading_responses.all():
