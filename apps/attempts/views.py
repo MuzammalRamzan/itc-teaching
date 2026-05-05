@@ -796,9 +796,18 @@ def fet_dashboard(request):
     for rr in ReadingResponse.objects.filter(attempt__user=user, percentage__isnull=False):
         score_samples.append(rr.percentage)
     for wr in WritingResponse.objects.filter(attempt__user=user, total__isnull=False):
-        # Writing total is out of 30 — convert to percentage.
-        if wr.total is not None:
-            score_samples.append(round((wr.total / 30) * 100))
+        if wr.total is None:
+            continue
+        # Each marked criterion is out of 5. The rubric uses a different
+        # number of criteria per writing part: Part 1 has 2 criteria
+        # (max 10), Part 2 has 4 criteria (max 20). The legacy formula
+        # `total / 30 * 100` was wrong — derive the real max from which
+        # criterion fields were actually scored.
+        criteria = [wr.score_content, wr.score_communicative, wr.score_organisation, wr.score_language]
+        max_score = sum(5 for c in criteria if c is not None)
+        if max_score <= 0:
+            continue
+        score_samples.append(round((wr.total / max_score) * 100))
     average_score = round(sum(score_samples) / len(score_samples)) if score_samples else 0
 
     # Current level — derived from average score, CEFR-style cut-offs.
@@ -815,34 +824,35 @@ def fet_dashboard(request):
     else:
         current_level = {'cefr': '—', 'label': 'Not yet rated'}
 
-    # This week vs last week submissions.
+    # This week vs last week — count DISTINCT exams the user submitted any
+    # response for, not the raw count of response rows. Writing has 2
+    # responses per exam (Q1+Q2) and reading practice can be 6+ per exam,
+    # so the previous "count rows" behaviour was inflating the number.
     today = timezone.now().date()
     week_start = today - timedelta(days=today.weekday())  # Monday
     last_week_start = week_start - timedelta(days=7)
-    this_week_count = 0
-    last_week_count = 0
+    this_week_exams = set()
+    last_week_exams = set()
     daily_active = {i: False for i in range(7)}  # 0=Mon … 6=Sun
-    for ts in WritingResponse.objects.filter(attempt__user=user).values_list('submitted_at', flat=True):
-        if not ts: continue
-        d = ts.date()
-        if d >= week_start: this_week_count += 1
-        if last_week_start <= d < week_start: last_week_count += 1
-        if d >= week_start and (d - week_start).days < 7:
-            daily_active[(d - week_start).days] = True
-    for ts in ReadingResponse.objects.filter(attempt__user=user).values_list('submitted_at', flat=True):
-        if not ts: continue
-        d = ts.date()
-        if d >= week_start: this_week_count += 1
-        if last_week_start <= d < week_start: last_week_count += 1
-        if d >= week_start and (d - week_start).days < 7:
-            daily_active[(d - week_start).days] = True
-    for ts in SpeakingResponse.objects.filter(attempt__user=user).values_list('submitted_at', flat=True):
-        if not ts: continue
-        d = ts.date()
-        if d >= week_start: this_week_count += 1
-        if last_week_start <= d < week_start: last_week_count += 1
-        if d >= week_start and (d - week_start).days < 7:
-            daily_active[(d - week_start).days] = True
+
+    def _ingest(qs):
+        # qs yields (submitted_at, attempt__exam_id) tuples
+        for ts, exam_id in qs:
+            if not ts: continue
+            d = ts.date()
+            if d >= week_start:
+                this_week_exams.add(exam_id)
+            if last_week_start <= d < week_start:
+                last_week_exams.add(exam_id)
+            if d >= week_start and (d - week_start).days < 7:
+                daily_active[(d - week_start).days] = True
+
+    _ingest(WritingResponse.objects.filter(attempt__user=user).values_list('submitted_at', 'attempt__exam_id'))
+    _ingest(ReadingResponse.objects.filter(attempt__user=user).values_list('submitted_at', 'attempt__exam_id'))
+    _ingest(SpeakingResponse.objects.filter(attempt__user=user).values_list('submitted_at', 'attempt__exam_id'))
+
+    this_week_count = len(this_week_exams)
+    last_week_count = len(last_week_exams)
     weekly_activity = [
         {'label': lbl, 'active': daily_active[i]}
         for i, lbl in enumerate(['M', 'T', 'W', 'T', 'F', 'S', 'S'])
