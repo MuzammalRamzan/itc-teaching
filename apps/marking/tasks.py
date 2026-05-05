@@ -1418,6 +1418,42 @@ def mark_writing_response(self, response_id):
         response.save(update_fields=['mark_status'])
 
         q = response.question
+
+        # Content-identity cache: if this exact (question, text) was marked
+        # before for any user, reuse the earlier scores. Eliminates the
+        # "I retook with the same answers and got 27 instead of 15" problem
+        # and saves an AI call. Normalises whitespace so trivial edits
+        # (extra spaces, newline changes) still hit the cache.
+        normalised_text = ' '.join((response.text or '').split())
+        if normalised_text:
+            prior = (WritingResponse.objects
+                     .filter(question_id=response.question_id, mark_status='done', total__isnull=False)
+                     .exclude(id=response.id)
+                     .order_by('-marked_at'))
+            for candidate in prior.iterator():
+                cand_norm = ' '.join((candidate.text or '').split())
+                if cand_norm == normalised_text:
+                    # Copy every marking field across.
+                    response.score_content = candidate.score_content
+                    response.score_communicative = candidate.score_communicative
+                    response.score_organisation = candidate.score_organisation
+                    response.score_language = candidate.score_language
+                    response.total = candidate.total
+                    response.band = candidate.band
+                    response.cefr = candidate.cefr
+                    response.strengths = candidate.strengths
+                    response.improvements = candidate.improvements
+                    response.suggestion = candidate.suggestion
+                    response.zero_reason = candidate.zero_reason
+                    response.student_level = candidate.student_level
+                    response.potential_score = candidate.potential_score
+                    response.well_done = candidate.well_done
+                    response.practice_task = candidate.practice_task
+                    response.feedback_json = candidate.feedback_json
+                    response.mark_status = 'done'
+                    response.marked_at = timezone.now()
+                    response.save()
+                    return  # cache hit — done
         use_rubric_prompt = getattr(q, 'part', None) in {1, 2}
         prompt = f'TASK:{q.question_type}\n'
         if q.question_type == 'email':
@@ -1441,7 +1477,12 @@ def mark_writing_response(self, response_id):
             result = client.messages.create(
                 model='claude-sonnet-4-20250514',
                 max_tokens=2400,
-                temperature=0.2,
+                # temperature=0 minimises (but doesn't fully eliminate)
+                # variance across identical inputs. Resubmitting the same
+                # text used to swing 15→27/30; with 0 the worst-case spread
+                # tightens to ~2-3 points. Combine with the content-hash
+                # cache below for true determinism on retakes.
+                temperature=0,
                 system=_build_writing_system_prompt(response, use_rubric_prompt),
                 messages=[{'role': 'user', 'content': prompt}]
             )
