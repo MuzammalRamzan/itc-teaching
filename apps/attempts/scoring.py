@@ -1,7 +1,15 @@
 """
 Auto-scoring for the Reading section.
 No AI needed — compares submitted answers against stored correct answers.
+
+The 5-part layout (see ReadingPart.PART_TYPES) maps to these submission keys:
+    Part 1 — Signs & Notices       sign_{i} → letter ('A'/'B'/'C')
+    Part 2 — Gap Fill              gap_{i}  → option string ('even')
+    Part 3 — Text Matching         q_{i}    → person id ('ali')
+    Part 4 — People ↔ Place        q_{i}    → person id ('p2')
+    Part 5 — Long Reading          q_{i}    → letter ('A'/'B'/'C'/'D')
 """
+
 
 def as_dict(value):
     return value if isinstance(value, dict) else {}
@@ -9,6 +17,10 @@ def as_dict(value):
 
 def as_list(value):
     return value if isinstance(value, list) else []
+
+
+def _norm(value):
+    return str(value or '').strip().lower()
 
 
 def score_reading_part(reading_part, submitted_answers):
@@ -22,46 +34,39 @@ def score_reading_part(reading_part, submitted_answers):
     max_score = 0
     submitted_answers = as_dict(submitted_answers)
 
-    if part == 1:  # Signs MCQ
+    if part == 1:  # Signs & Notices — single MCQ per sign
         for i, sign in enumerate(as_list(content.get('signs'))):
             sign = as_dict(sign)
             max_score += 1
-            if submitted_answers.get(f'sign_{i}') == sign.get('answer'):
+            if _norm(submitted_answers.get(f'sign_{i}')) == _norm(sign.get('correct') or sign.get('answer')):
                 score += 1
 
-    elif part == 2:  # Matching
-        correct_answers = as_list(content.get('answers'))
-        for i, correct in enumerate(correct_answers):
+    elif part == 2:  # Gap Fill — pick from 3 options for each gap
+        for i, gap in enumerate(as_list(content.get('gaps'))):
+            gap = as_dict(gap)
             max_score += 1
-            if submitted_answers.get(f'person_{i}') == correct:
+            if _norm(submitted_answers.get(f'gap_{i}')) == _norm(gap.get('correct')):
                 score += 1
 
-    elif part == 3:  # True/False
-        for i, stmt in enumerate(as_list(content.get('statements'))):
-            stmt = as_dict(stmt)
-            max_score += 1
-            if submitted_answers.get(f'stmt_{i}') == stmt.get('answer'):
-                score += 1
-
-    elif part == 4:  # MCQ Article
+    elif part == 3:  # Text Matching — match a question to one of N people
         for i, q in enumerate(as_list(content.get('questions'))):
             q = as_dict(q)
             max_score += 1
-            if submitted_answers.get(f'q_{i}') == q.get('answer'):
+            if _norm(submitted_answers.get(f'q_{i}')) == _norm(q.get('correct')):
                 score += 1
 
-    elif part == 5:  # MCQ Cloze
-        for i, blank in enumerate(as_list(content.get('blanks'))):
-            blank = as_dict(blank)
+    elif part == 4:  # People ↔ Place — pick the person who fits the place
+        for i, item in enumerate(as_list(content.get('items'))):
+            item = as_dict(item)
             max_score += 1
-            if submitted_answers.get(f'blank_{i}') == blank.get('answer'):
+            if _norm(submitted_answers.get(f'q_{i}')) == _norm(item.get('correct')):
                 score += 1
 
-    elif part == 6:  # Open Cloze
-        for i, answer in enumerate(as_list(content.get('answers'))):
+    elif part == 5:  # Long Reading — A/B/C/D MCQ on the article
+        for i, q in enumerate(as_list(content.get('questions'))):
+            q = as_dict(q)
             max_score += 1
-            submitted = str(submitted_answers.get(f'open_{i}', '')).strip().lower()
-            if submitted == str(answer or '').lower():
+            if _norm(submitted_answers.get(f'q_{i}')) == _norm(q.get('correct')):
                 score += 1
 
     return {'score': score, 'max': max_score, 'part_number': part}

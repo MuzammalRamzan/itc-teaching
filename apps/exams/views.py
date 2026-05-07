@@ -110,8 +110,8 @@ def _import_fet_exam_payload(payload, user, exam=None):
         if not isinstance(item, dict):
             raise ValueError('Each reading part must be an object.')
         part_number = int(item.get('part_number') or 0)
-        if part_number < 1 or part_number > 6:
-            raise ValueError('Reading part_number must be between 1 and 6.')
+        if part_number < 1 or part_number > 5:
+            raise ValueError('Reading part_number must be between 1 and 5.')
         content = item.get('content', {})
         if not isinstance(content, dict):
             raise ValueError(f'Reading part {part_number} content must be an object.')
@@ -127,7 +127,7 @@ def _import_fet_exam_payload(payload, user, exam=None):
                 created_by=user,
                 is_active=False,
             )
-            for part_num in range(1, 7):
+            for part_num in range(1, 6):
                 ReadingPart.objects.create(exam=exam, part_number=part_num)
         else:
             exam.title = title
@@ -142,7 +142,7 @@ def _import_fet_exam_payload(payload, user, exam=None):
         for row in writing_rows:
             WritingQuestion.objects.create(exam=exam, **row)
 
-        for part_num in range(1, 7):
+        for part_num in range(1, 6):
             part, _ = ReadingPart.objects.get_or_create(exam=exam, part_number=part_num)
             content = reading_by_part.get(part_num, {})
             part.content = content
@@ -186,7 +186,7 @@ def _import_general_writing_payload(payload, user, exam=None):
                 created_by=user,
                 is_active=False,
             )
-            for part_num in range(1, 7):
+            for part_num in range(1, 6):
                 ReadingPart.objects.create(exam=exam, part_number=part_num)
         else:
             exam.title = title
@@ -211,6 +211,12 @@ def exam_list(request):
         family = (request.query_params.get('family') or '').strip().lower()
         if family in {Exam.FAMILY_GENERAL, Exam.FAMILY_FET}:
             exams = exams.filter(exam_family=family)
+        # Filter by primary_skill so the admin can list "Writing exams" and
+        # "Reading exams" as independent libraries even though they share
+        # the same Exam table.
+        primary_skill = (request.query_params.get('primary_skill') or '').strip().lower()
+        if primary_skill in {Exam.SKILL_WRITING, Exam.SKILL_READING, Exam.SKILL_SPEAKING}:
+            exams = exams.filter(primary_skill=primary_skill)
 
         page_param = request.query_params.get('page')
         if page_param is None:
@@ -400,16 +406,15 @@ def import_reading_content(request, exam_id):
     """Bulk-import all reading parts from a single JSON payload.
 
     Body shape (any subset of parts may be omitted — only provided parts get
-    updated, others left untouched):
+    updated, others left untouched). The 5-part FET reading layout:
 
         {
           "parts": {
-            "1": { "signs": [ ... ] },
-            "2": { "people": [...], "texts": [...], "answers": [...] },
-            "3": { "passage": "...", "statements": [...] },
-            "4": { "article": "...", "questions": [...] },
-            "5": { "passage": "...", "blanks": [...] },
-            "6": { "passage": "...", "answers": [...] }
+            "1": { "signs": [ { from, to, body, signoff, question, options[3], correct, why_en, why_ar, evidence } ] },
+            "2": { "topic": "...", "passage": "... [GAP1] …", "gaps": [ { n, options[3], correct, why_en, why_ar, evidence } ] },
+            "3": { "people": [...], "questions": [ { n, text, correct, why_en, why_ar, evidence } ] },
+            "4": { "items": [ { n, place: { name, body }, people: [...], correct, why_en, why_ar, evidence } ] },
+            "5": { "article": { title, byline, paragraphs: [...] }, "questions": [ { n, text, options[4], correct, focus_paragraph, highlight, why_en, why_ar, evidence } ] }
           }
         }
     """
@@ -425,7 +430,31 @@ def import_reading_content(request, exam_id):
         return Response({'error': 'Payload must be a JSON object.'}, status=status.HTTP_400_BAD_REQUEST)
     parts_payload = payload.get('parts')
     if not isinstance(parts_payload, dict):
-        return Response({'error': 'Payload must include a "parts" object keyed by part number (1–6).'}, status=status.HTTP_400_BAD_REQUEST)
+        return Response({'error': 'Payload must include a "parts" object keyed by part number (1–5).'}, status=status.HTTP_400_BAD_REQUEST)
+
+    # Optional top-level metadata. Lets admins ship the exam title (and a
+    # description / time) as part of the same JSON file so they don't have
+    # to edit the exam name separately after upload.
+    title_from_json = (payload.get('title') or '').strip()
+    description_from_json = payload.get('description')
+    time_mins_from_json = payload.get('time_mins')
+    exam_meta_changed = False
+    if title_from_json:
+        exam.title = title_from_json
+        exam_meta_changed = True
+    if isinstance(description_from_json, str):
+        exam.description = description_from_json
+        exam_meta_changed = True
+    if time_mins_from_json is not None:
+        try:
+            tm = int(time_mins_from_json)
+            if tm > 0:
+                exam.time_mins = tm
+                exam_meta_changed = True
+        except (TypeError, ValueError):
+            pass
+    if exam_meta_changed:
+        exam.save(update_fields=['title', 'description', 'time_mins'])
 
     updated = []
     skipped = []
@@ -436,10 +465,10 @@ def import_reading_content(request, exam_id):
         try:
             num = int(str(part_key).strip().lower().replace('part', '').replace(' ', ''))
         except ValueError:
-            errors[str(part_key)] = 'Invalid part key — must be 1, 2, 3, 4, 5, or 6.'
+            errors[str(part_key)] = 'Invalid part key — must be 1, 2, 3, 4, or 5.'
             continue
-        if num < 1 or num > 6:
-            errors[str(part_key)] = 'Part number must be between 1 and 6.'
+        if num < 1 or num > 5:
+            errors[str(part_key)] = 'Part number must be between 1 and 5.'
             continue
         if not isinstance(content, dict):
             errors[str(num)] = 'Content for this part must be a JSON object.'

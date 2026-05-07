@@ -11,11 +11,25 @@ class Exam(models.Model):
         (FAMILY_FET, 'FET'),
     ]
 
+    # Primary skill an exam was created for. Drives which admin library it
+    # appears in ("Writing exams" / "Reading exams" / "Speaking exams") and
+    # how the dashboard groups it. Existing rows are backfilled by the
+    # accompanying migration based on which content they actually carry.
+    SKILL_WRITING = 'writing'
+    SKILL_READING = 'reading'
+    SKILL_SPEAKING = 'speaking'
+    PRIMARY_SKILL_CHOICES = [
+        (SKILL_WRITING, 'Writing'),
+        (SKILL_READING, 'Reading'),
+        (SKILL_SPEAKING, 'Speaking'),
+    ]
+
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     title = models.CharField(max_length=300)
     description = models.TextField(blank=True, default='')
     time_mins = models.IntegerField(default=45)
     exam_family = models.CharField(max_length=20, choices=FAMILY_CHOICES, default=FAMILY_GENERAL)
+    primary_skill = models.CharField(max_length=20, choices=PRIMARY_SKILL_CHOICES, default=SKILL_WRITING)
     created_by = models.ForeignKey(User, on_delete=models.PROTECT, related_name='created_exams')
     created_at = models.DateTimeField(auto_now_add=True)
     is_active = models.BooleanField(default=True)
@@ -140,22 +154,23 @@ class SpeakingPart(models.Model):
 
 
 class ReadingPart(models.Model):
+    # New 5-part FET reading layout, mirroring the gallery design 1:1.
+    # Old (pre-2026-05) parts 2/3/4/5/6 used different content shapes —
+    # legacy data is wiped by the matching migration; admin must re-upload.
     PART_TYPES = [
-        (1, 'Multiple Choice - Signs & Notices'),
-        (2, 'Matching'),
-        (3, 'True / False'),
-        (4, 'Multiple Choice - Article'),
-        (5, 'Multiple Choice Cloze'),
-        (6, 'Open Cloze'),
+        (1, 'Signs & Notices'),
+        (2, 'Gap Fill'),
+        (3, 'Text Matching'),
+        (4, 'People ↔ Place'),
+        (5, 'Long Reading'),
     ]
 
     TYPE_DESCRIPTIONS = {
-        1: 'Look at the text in each question. What does it say? Choose the correct explanation (A, B or C).',
-        2: 'The people below all want to find an activity. Eight short texts describe different activities. Decide which would be most suitable for each person.',
-        3: 'Look at the sentences below about a topic. Read the text to decide if each sentence is correct (True) or incorrect (False).',
-        4: 'Read the article. For each question, choose the correct answer (A, B, C or D).',
-        5: 'Read the text below and choose the correct word for each space (A, B, C or D).',
-        6: 'Read the text below and write the missing word in each space. Use only ONE word.',
+        1: 'Read each short note or notice and choose the correct meaning (A, B or C).',
+        2: 'Read the passage and choose the best word for each gap from three options.',
+        3: 'Read three short personal texts. For each question, choose which person is being described.',
+        4: 'For each place, read the description and pick the person whose needs match it best.',
+        5: 'Read the article and answer the multiple-choice questions (A, B, C or D).',
     }
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
@@ -174,19 +189,24 @@ class ReadingPart(models.Model):
 
     @property
     def question_count(self):
-        c = self.content
+        # Each part counts the number of scoreable questions in its content.
+        # Shapes match gallery-frontend's data model exactly:
+        #   1: { signs: [{ from, to, body, signoff, question, options[3], correct, why_en, why_ar, evidence }] }
+        #   2: { topic, passage, gaps: [{ n, options[3], correct, why_en, why_ar, evidence }] }
+        #   3: { people: [{ id, name, color, text }], questions: [{ n, text, correct, why_en, why_ar, evidence }] }
+        #   4: { items: [{ n, place: { name, body }, people: [{ id, name, need }], correct, why_en, why_ar, evidence }] }
+        #   5: { article: { title, byline, paragraphs[] }, questions: [{ n, text, options[4], correct, focus_paragraph, highlight, why_en, why_ar, evidence }] }
+        c = self.content if isinstance(self.content, dict) else {}
         if self.part_number == 1:
-            return len(c.get('signs', []))
+            return len(c.get('signs', []) or [])
         elif self.part_number == 2:
-            return len(c.get('people', []))
+            return len(c.get('gaps', []) or [])
         elif self.part_number == 3:
-            return len(c.get('statements', []))
+            return len(c.get('questions', []) or [])
         elif self.part_number == 4:
-            return len(c.get('questions', []))
+            return len(c.get('items', []) or [])
         elif self.part_number == 5:
-            return len(c.get('blanks', []))
-        elif self.part_number == 6:
-            return len(c.get('answers', []))
+            return len(c.get('questions', []) or [])
         return 0
 
     @property

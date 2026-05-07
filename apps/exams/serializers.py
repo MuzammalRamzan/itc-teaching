@@ -44,7 +44,7 @@ class ExamListSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Exam
-        fields = ['id', 'title', 'description', 'time_mins', 'exam_family', 'created_at',
+        fields = ['id', 'title', 'description', 'time_mins', 'exam_family', 'primary_skill', 'created_at',
                   'question_count', 'is_active', 'is_complete', 'activation_block_reason',
                   'has_writing_content', 'has_reading_content']
 
@@ -67,7 +67,7 @@ class ExamDetailSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Exam
-        fields = ['id', 'title', 'description', 'time_mins', 'exam_family', 'created_at',
+        fields = ['id', 'title', 'description', 'time_mins', 'exam_family', 'primary_skill', 'created_at',
                   'is_active', 'is_complete', 'activation_block_reason', 'questions', 'speaking_parts', 'reading_parts']
 
     def get_is_complete(self, obj):
@@ -80,13 +80,21 @@ class ExamDetailSerializer(serializers.ModelSerializer):
 class ExamCreateSerializer(serializers.ModelSerializer):
     class Meta:
         model = Exam
-        fields = ['title', 'description', 'time_mins', 'exam_family', 'is_active']
+        fields = ['title', 'description', 'time_mins', 'exam_family', 'primary_skill', 'is_active']
 
     def create(self, validated_data):
         user = self.context['request'].user
-        validated_data['is_active'] = False
+        # New exams default to published. Admins reported "I created 20 exams
+        # but only 5 show up" — that was the old behaviour, where every fresh
+        # exam started as is_active=False and had to be Published manually.
+        # The Admin → Exams panel still has an Unpublish toggle for the rare
+        # case where someone wants to prep content out of view.
+        if 'is_active' not in validated_data:
+            validated_data['is_active'] = True
         exam = Exam.objects.create(created_by=user, **validated_data)
-        # Auto-create the 6 reading part slots
-        for part_num in range(1, 7):
+        # Auto-create the 5 reading part slots (Signs, Gap Fill, Text Matching,
+        # People ↔ Place, Long Reading). Open Cloze (the legacy 6th part) was
+        # removed in the gallery refactor.
+        for part_num in range(1, 6):
             ReadingPart.objects.create(exam=exam, part_number=part_num)
         return exam
