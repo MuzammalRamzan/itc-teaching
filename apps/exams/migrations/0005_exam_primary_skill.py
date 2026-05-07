@@ -15,16 +15,14 @@ def backfill_primary_skill(apps, schema_editor):
     Exam = apps.get_model('exams', 'Exam')
     WritingQuestion = apps.get_model('exams', 'WritingQuestion')
     ReadingPart = apps.get_model('exams', 'ReadingPart')
-    SpeakingPart = apps.get_model('exams', 'SpeakingPart')
 
+    # Note: historical models don't expose @property attributes (only DB
+    # fields), so we can't filter SpeakingPart by `has_content`. Skip the
+    # speaking detection — those exams fall through to 'writing' which is
+    # the safe default. Admins can change them via the new library tabs.
     writing_ids = set(WritingQuestion.objects.values_list('exam_id', flat=True))
     reading_ids = set(
         ReadingPart.objects
-        .filter(has_content=True)
-        .values_list('exam_id', flat=True)
-    )
-    speaking_ids = set(
-        SpeakingPart.objects
         .filter(has_content=True)
         .values_list('exam_id', flat=True)
     )
@@ -34,8 +32,6 @@ def backfill_primary_skill(apps, schema_editor):
             exam.primary_skill = 'writing'
         elif exam.id in reading_ids:
             exam.primary_skill = 'reading'
-        elif exam.id in speaking_ids:
-            exam.primary_skill = 'speaking'
         else:
             exam.primary_skill = 'writing'
         exam.save(update_fields=['primary_skill'])
