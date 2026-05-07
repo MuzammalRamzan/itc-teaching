@@ -1,6 +1,7 @@
 import uuid
 from django.contrib.auth.models import AbstractBaseUser, BaseUserManager, PermissionsMixin
 from django.db import models
+from django.utils import timezone
 
 
 class UserManager(BaseUserManager):
@@ -42,6 +43,11 @@ class User(AbstractBaseUser, PermissionsMixin):
     is_staff = models.BooleanField(default=False)
     plan = models.CharField(max_length=20, choices=PLAN_CHOICES, default=PLAN_FREE)
     plan_purchased_at = models.DateTimeField(null=True, blank=True)
+    # When the current paid plan ends. Set when activating a promo trial
+    # (and could be set for any time-limited future plan). Null means the
+    # plan never expires (current behaviour for Basic / AI). When the
+    # timestamp is in the past, capability_map() treats the user as Free.
+    plan_expires_at = models.DateTimeField(null=True, blank=True)
     ai_credits = models.IntegerField(default=0)
     free_credits_claimed_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -58,17 +64,37 @@ class User(AbstractBaseUser, PermissionsMixin):
     def __str__(self):
         return f'{self.name} <{self.email}>'
 
+    def is_plan_expired(self):
+        """True when plan_expires_at is set and in the past."""
+        if not self.plan_expires_at:
+            return False
+        return self.plan_expires_at <= timezone.now()
+
+    @property
+    def effective_plan(self):
+        """The plan actually in force RIGHT NOW.
+
+        Promo trials and any other time-limited plan automatically fall
+        back to FREE once `plan_expires_at` passes. This is what every
+        capability check below reads, so an expired promo loses reading /
+        writing / speaking access without us needing a nightly cron to
+        rewrite the `plan` column.
+        """
+        if self.is_plan_expired():
+            return self.PLAN_FREE
+        return self.plan
+
     def can_access_reading(self):
-        return self.plan in {self.PLAN_PROMO, self.PLAN_BASIC, self.PLAN_AI}
+        return self.effective_plan in {self.PLAN_PROMO, self.PLAN_BASIC, self.PLAN_AI}
 
     def can_access_writing(self):
-        return self.plan in {self.PLAN_PROMO, self.PLAN_BASIC, self.PLAN_AI} or self.ai_credits > 0
+        return self.effective_plan in {self.PLAN_PROMO, self.PLAN_BASIC, self.PLAN_AI} or self.ai_credits > 0
 
     def can_access_speaking(self):
-        return self.plan in {self.PLAN_PROMO, self.PLAN_AI} and self.ai_credits > 0
+        return self.effective_plan in {self.PLAN_PROMO, self.PLAN_AI} and self.ai_credits > 0
 
     def can_access_full_exam(self):
-        return self.plan in {self.PLAN_PROMO, self.PLAN_AI} and self.ai_credits > 0
+        return self.effective_plan in {self.PLAN_PROMO, self.PLAN_AI} and self.ai_credits > 0
 
     def can_use_ai_marking(self):
         return self.ai_credits > 0

@@ -1,3 +1,4 @@
+from datetime import timedelta
 from decimal import Decimal
 from urllib.parse import quote, urlparse
 
@@ -640,6 +641,20 @@ def apply_payment_record(record, session):
         user.plan = record.target_plan
         user.plan_purchased_at = now
         user.ai_credits += record.credits_amount
+        # Promo trial expires; Basic / AI plans don't (until cancelled).
+        # Use the active Promotion's expires_at when one exists, otherwise
+        # fall back to a 7-day window from purchase. Any credits granted
+        # through the promo stay valid; only the plan flips back to Free.
+        if record.target_plan == User.PLAN_PROMO:
+            promo_offer = Promotion.objects.filter(
+                plan=User.PLAN_PROMO, is_active=True,
+            ).order_by('-created_at').first()
+            if promo_offer and promo_offer.expires_at and promo_offer.expires_at > now:
+                user.plan_expires_at = promo_offer.expires_at
+            else:
+                user.plan_expires_at = now + timedelta(days=7)
+        else:
+            user.plan_expires_at = None
         description = f'{record.credits_amount} credits added from {record.target_plan.upper()} plan purchase.'
     elif record.kind == PaymentRecord.KIND_CREDITS:
         user.ai_credits += record.credits_amount
@@ -647,7 +662,7 @@ def apply_payment_record(record, session):
     else:
         description = f'{record.credits_amount} credits added.'
 
-    user.save(update_fields=['plan', 'plan_purchased_at', 'ai_credits'])
+    user.save(update_fields=['plan', 'plan_purchased_at', 'plan_expires_at', 'ai_credits'])
     if record.credits_amount:
         create_credit_transaction(
             user=user,
