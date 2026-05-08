@@ -442,15 +442,17 @@ def my_attempts(request):
 
 @api_view(['GET'])
 def my_fet_attempts(request):
-    # Returns the calling user's recent writing-bearing attempts. Was previously
-    # gated to exam_family='fet' but the frontendFET app also creates 'general'
-    # attempts; this endpoint is only consumed by frontendFET so the looser
-    # filter is the right semantic.
+    # Returns the calling user's recent attempts that produced any
+    # gradeable signal — writing OR reading. The previous filter only
+    # matched attempts with writing_responses, which meant pure reading
+    # practice never reached the FET dashboard's streak / readiness
+    # calculation, so students who'd been doing reading every day still
+    # saw "0 day streaks" and "Not yet" readiness. The Reports page
+    # filters writing-only attempts client-side, so widening this query
+    # is safe.
     attempts = (
-        ExamAttempt.objects.filter(
-            user=request.user,
-            writing_responses__isnull=False,
-        )
+        ExamAttempt.objects.filter(user=request.user)
+        .filter(Q(writing_responses__isnull=False) | Q(reading_responses__isnull=False))
         .select_related('exam')
         .prefetch_related('writing_responses__question', 'reading_responses')
         .distinct()
