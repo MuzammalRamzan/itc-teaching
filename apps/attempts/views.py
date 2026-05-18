@@ -653,6 +653,22 @@ def _compute_exam_progress_for_user(user):
         for sr in a.speaking_responses.all():
             last_activity[ex_id] = max(last_activity.get(ex_id, sr.submitted_at), sr.submitted_at)
 
+    # Pre-fetch the first writing question per exam in a single query.
+    # The previous behaviour ran a `.filter(exam=ex).order_by(...).first()`
+    # INSIDE the per-exam loop — 300 exams = 300 extra queries, which
+    # was the dominant cost of the dashboard endpoint. We pull them all
+    # at once, ordered, and pick the first row per exam_id.
+    first_writing_label_by_exam = {}
+    for wq in (
+        WritingQuestion.objects
+        .filter(exam_id__in=[ex.id for ex in exams])
+        .order_by('exam_id', 'order', 'part')
+        .values_list('exam_id', 'label')
+    ):
+        ex_key = str(wq[0])
+        if ex_key not in first_writing_label_by_exam and wq[1]:
+            first_writing_label_by_exam[ex_key] = wq[1]
+
     summaries = []
     for ex in exams:
         ex_id = str(ex.id)
@@ -676,12 +692,11 @@ def _compute_exam_progress_for_user(user):
         else:
             status_label = 'not_started'
 
-        # Pick a subtitle — prefer first writing question label, else exam description
+        # Subtitle — exam description, else the first writing question's
+        # label (prefetched above, no extra query).
         subtitle = (ex.description or '').strip()
         if not subtitle and w_total > 0:
-            first_q = WritingQuestion.objects.filter(exam=ex).order_by('order', 'part').first()
-            if first_q and first_q.label:
-                subtitle = first_q.label
+            subtitle = first_writing_label_by_exam.get(ex_id, '')
 
         # Skill hint: which skill has the most progress / most content
         if w_total >= r_total and w_total >= s_total:
@@ -916,6 +931,64 @@ def fet_dashboard(request):
     first_name = name.split(' ')[0] if name else 'there'
     initials = ''.join([p[0] for p in name.split(' ') if p][:2]).upper() or first_name[:2].upper()
 
+    # Aggregate skill counts computed from the FULL set of summaries so
+    # the dashboard's skill cards stay accurate even when `all_exams` is
+    # paginated below. Counted at the (exam × skill) level — a single
+    # exam with both writing and reading content contributes 2 rows.
+    skills_aggregate = {
+        sk: {'total': 0, 'completed': 0, 'in_progress': 0, 'not_started': 0}
+        for sk in ('writing', 'reading', 'speaking', 'listening')
+    }
+    skills_completed_all = 0
+    skills_available_all = 0
+    for s in summaries:
+        for sk_key, sk in (s.get('skills') or {}).items():
+            if not sk or not sk.get('has_content'):
+                continue
+            if sk_key not in skills_aggregate:
+                continue
+            skills_aggregate[sk_key]['total'] += 1
+            status = sk.get('status') or 'not_started'
+            if status == 'completed':
+                skills_aggregate[sk_key]['completed'] += 1
+                skills_completed_all += 1
+            elif status == 'in_progress':
+                skills_aggregate[sk_key]['in_progress'] += 1
+            else:
+                skills_aggregate[sk_key]['not_started'] += 1
+            skills_available_all += 1
+
+    # Optional pagination for `all_exams`. When `exams_page` is in the
+    # query string we slice the list and add metadata so the frontend
+    # can render page N without holding the full library in memory.
+    # The aggregates above and the other top-level fields
+    # (continue_learning, average_score, skill_breakdown, etc.) are still
+    # computed from the full set, so stats remain accurate.
+    exams_page_param = request.query_params.get('exams_page')
+    exams_pagination = None
+    paged_summaries = summaries
+    if exams_page_param is not None:
+        try:
+            page = max(1, int(exams_page_param))
+        except (TypeError, ValueError):
+            page = 1
+        try:
+            page_size = max(1, min(50, int(request.query_params.get('exams_page_size', 5))))
+        except (TypeError, ValueError):
+            page_size = 5
+        total = len(summaries)
+        start = (page - 1) * page_size
+        end = start + page_size
+        paged_summaries = summaries[start:end]
+        exams_pagination = {
+            'count': total,
+            'page': page,
+            'page_size': page_size,
+            'total_pages': max(1, (total + page_size - 1) // page_size),
+            'has_next': end < total,
+            'has_prev': page > 1,
+        }
+
     return Response({
         'user': {'name': name, 'first_name': first_name, 'initials': initials, 'email': user.email or ''},
         'overall_progress': overall,
@@ -927,10 +1000,14 @@ def fet_dashboard(request):
         },
         'continue_learning': continue_learning,
         'next_up': next_up,
-        'in_progress': in_progress,
-        'completed': completed,
-        'not_started': not_started,
-        'all_exams': summaries,
+        'in_progress': in_progress if exams_pagination is None else [],
+        'completed': completed if exams_pagination is None else [],
+        'not_started': not_started if exams_pagination is None else [],
+        'all_exams': paged_summaries,
+        'all_exams_pagination': exams_pagination,
+        'skills_aggregate': skills_aggregate,
+        'skills_completed_all': skills_completed_all,
+        'skills_available_all': skills_available_all,
         'skill_breakdown': skill_breakdown,
         'weekly_activity': weekly_activity,
         'achievements': achievements,
