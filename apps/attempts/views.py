@@ -564,17 +564,26 @@ def calendar_event_admin_detail(request, event_id):
 #   }
 
 
-def _compute_exam_progress_for_user(user):
-    """Returns a list of per-exam summaries, sorted by last_activity desc."""
+def _compute_exam_progress_for_user(user, exams_qs=None):
+    """Returns per-exam summaries for the given queryset.
+
+    When `exams_qs` is passed (e.g. a paginated slice) we only build
+    summaries for those exams — the slow loops, prefetches and JSON
+    serialization stay proportional to the page size, not to the full
+    library. Aggregate stats are computed by a separate helper that
+    runs cheap COUNT queries against the full DB so the dashboard's
+    skill cards stay accurate.
+    """
     from apps.exams.models import ReadingPart  # local import to avoid cycles
     from collections import defaultdict
 
     # Pull every admin-active exam — both family='general' and family='fet' —
     # so the dashboard shows the full set of papers a student can work on.
     # Filtering by family was dropping exams the user expected to see here.
-    exams_qs = Exam.objects.filter(
-        is_active=True, is_deleted=False,
-    ).order_by('-created_at')
+    if exams_qs is None:
+        exams_qs = Exam.objects.filter(
+            is_active=True, is_deleted=False,
+        ).order_by('-created_at')
     # Defensive dedupe by id (in case a future migration introduces dupes).
     seen_exam_ids = set()
     exams = []
@@ -582,41 +591,38 @@ def _compute_exam_progress_for_user(user):
         if ex.id in seen_exam_ids: continue
         seen_exam_ids.add(ex.id)
         exams.append(ex)
+    exam_ids = [ex.id for ex in exams]
 
-    # Writing tasks are counted at the PART level, not per-question. The
-    # writing exam has 2 parts: Part 1 (mandatory single question) and
-    # Part 2 (multiple topic options, the user picks ONE). So the per-exam
-    # writing total is "how many parts have at least one question" — never
-    # more than 2 — and a part is "done" when the user has submitted any
-    # response for any of that part's questions.
+    # All the metadata fetches below filter by exam_id__in so they stay
+    # proportional to the (paginated) exam set instead of scanning the
+    # entire WritingQuestion / ReadingPart / SpeakingPart tables on
+    # every dashboard request.
     writing_parts_meta = defaultdict(set)  # exam_id → {1, 2}
-    for wq in WritingQuestion.objects.values('exam_id', 'part').distinct():
+    for wq in WritingQuestion.objects.filter(exam_id__in=exam_ids).values('exam_id', 'part').distinct():
         writing_parts_meta[str(wq['exam_id'])].add(int(wq['part']))
-    # Map exam_id → which question_id belongs to which part, so we can
-    # convert WritingResponse.question_id → part when building "done" set.
     question_part_map = {}  # str(question_id) → int(part)
-    for wq in WritingQuestion.objects.values('id', 'part'):
+    for wq in WritingQuestion.objects.filter(exam_id__in=exam_ids).values('id', 'part'):
         question_part_map[str(wq['id'])] = int(wq['part'])
     writing_totals = {ex_id: len(parts) for ex_id, parts in writing_parts_meta.items()}
 
     reading_totals = defaultdict(int)
-    reading_parts_meta = defaultdict(set)  # exam_id → {part_numbers with content}
-    for rp in ReadingPart.objects.all():
+    reading_parts_meta = defaultdict(set)
+    for rp in ReadingPart.objects.filter(exam_id__in=exam_ids):
         if rp.has_content and getattr(rp, 'question_count', 0) > 0:
             reading_parts_meta[str(rp.exam_id)].add(rp.part_number)
     for ex_id, parts in reading_parts_meta.items():
         reading_totals[ex_id] = len(parts)
 
     speaking_totals = defaultdict(int)
-    for sp in SpeakingPart.objects.all():
+    for sp in SpeakingPart.objects.filter(exam_id__in=exam_ids):
         if sp.has_content:
             speaking_totals[str(sp.exam_id)] += 1
 
-    # All attempts for this user, with response rows prefetched in batch so
-    # we don't fire 3 queries per attempt as we iterate (N+1 → ~4 queries
-    # total regardless of attempt count). Critical for users with 100+ exams.
+    # Pull only the user's attempts for these exams. Without the
+    # exam_id__in filter every dashboard hit walked the user's entire
+    # attempt history regardless of which page we're rendering.
     user_attempts = list(
-        ExamAttempt.objects.filter(user=user)
+        ExamAttempt.objects.filter(user=user, exam_id__in=exam_ids)
         .select_related('exam')
         .prefetch_related('writing_responses', 'reading_responses', 'speaking_responses')
     )
@@ -655,13 +661,12 @@ def _compute_exam_progress_for_user(user):
 
     # Pre-fetch the first writing question per exam in a single query.
     # The previous behaviour ran a `.filter(exam=ex).order_by(...).first()`
-    # INSIDE the per-exam loop — 300 exams = 300 extra queries, which
-    # was the dominant cost of the dashboard endpoint. We pull them all
-    # at once, ordered, and pick the first row per exam_id.
+    # INSIDE the per-exam loop. We pull them all at once, ordered, and
+    # pick the first row per exam_id.
     first_writing_label_by_exam = {}
     for wq in (
         WritingQuestion.objects
-        .filter(exam_id__in=[ex.id for ex in exams])
+        .filter(exam_id__in=exam_ids)
         .order_by('exam_id', 'order', 'part')
         .values_list('exam_id', 'label')
     ):
@@ -765,6 +770,127 @@ def _compute_exam_progress_for_user(user):
     return summaries
 
 
+def _compute_skills_aggregate_for_user(user):
+    """Cheap aggregates for the dashboard's skill cards.
+
+    Computed via 4-5 small COUNT queries instead of iterating every
+    summary in `_compute_exam_progress_for_user`. This keeps the
+    skill-card totals accurate when the exam list is paginated and
+    we no longer materialise summaries for every exam.
+
+    Returns: { writing: {total, completed, in_progress, not_started}, ... }
+    plus a flat (skills_completed_all, skills_available_all) pair.
+    """
+    from apps.exams.models import ReadingPart  # local import to avoid cycles
+
+    active_exam_ids = set(
+        Exam.objects.filter(is_active=True, is_deleted=False)
+        .values_list('id', flat=True)
+    )
+
+    writing_exam_ids = set(
+        WritingQuestion.objects
+        .filter(exam_id__in=active_exam_ids)
+        .values_list('exam_id', flat=True)
+        .distinct()
+    )
+    reading_exam_ids = set()
+    for rp in ReadingPart.objects.filter(exam_id__in=active_exam_ids):
+        if rp.has_content and getattr(rp, 'question_count', 0) > 0:
+            reading_exam_ids.add(rp.exam_id)
+    speaking_exam_ids = set()
+    for sp in SpeakingPart.objects.filter(exam_id__in=active_exam_ids):
+        if sp.has_content:
+            speaking_exam_ids.add(sp.exam_id)
+
+    # User progress: which (exam_id, skill) pairs are completed vs
+    # in_progress. We pull the user's responses once and bucket by skill.
+    completed_writing = set()
+    in_progress_writing = set()
+    completed_reading = set()
+    in_progress_reading = set()
+    completed_speaking = set()
+    in_progress_speaking = set()
+
+    # Writing — bucket by writing PART (Part 1 + Part 2). An exam with
+    # both parts answered is "completed" for writing, one part is "in_progress".
+    writing_done_parts = {}  # exam_id -> set of parts
+    question_part_map = {}
+    for wq in WritingQuestion.objects.filter(exam_id__in=writing_exam_ids).values('id', 'exam_id', 'part'):
+        question_part_map[wq['id']] = (wq['exam_id'], wq['part'])
+    writing_total_parts = {}
+    for wq in WritingQuestion.objects.filter(exam_id__in=writing_exam_ids).values('exam_id', 'part').distinct():
+        writing_total_parts.setdefault(wq['exam_id'], set()).add(wq['part'])
+    for wr in WritingResponse.objects.filter(attempt__user=user, question_id__in=question_part_map.keys()).values('question_id'):
+        ex_id, part = question_part_map[wr['question_id']]
+        writing_done_parts.setdefault(ex_id, set()).add(part)
+    for ex_id in writing_exam_ids:
+        done = len(writing_done_parts.get(ex_id, set()))
+        total = len(writing_total_parts.get(ex_id, set()))
+        if total and done >= total:
+            completed_writing.add(ex_id)
+        elif done > 0:
+            in_progress_writing.add(ex_id)
+
+    # Reading — bucket by reading PART (admin can configure 1-5).
+    reading_total_parts = {}
+    for rp in ReadingPart.objects.filter(exam_id__in=reading_exam_ids):
+        if rp.has_content and getattr(rp, 'question_count', 0) > 0:
+            reading_total_parts.setdefault(rp.exam_id, set()).add(rp.part_number)
+    reading_done_parts = {}
+    for rr in ReadingResponse.objects.filter(attempt__user=user, attempt__exam_id__in=reading_exam_ids).values('attempt__exam_id', 'part_scores'):
+        for ps in (rr['part_scores'] or []):
+            pn = ps.get('part_number') if isinstance(ps, dict) else None
+            if pn is not None:
+                reading_done_parts.setdefault(rr['attempt__exam_id'], set()).add(int(pn))
+    for ex_id in reading_exam_ids:
+        done = len(reading_done_parts.get(ex_id, set()))
+        total = len(reading_total_parts.get(ex_id, set()))
+        if total and done >= total:
+            completed_reading.add(ex_id)
+        elif done > 0:
+            in_progress_reading.add(ex_id)
+
+    # Speaking — bucket by count of responses per exam.
+    speaking_total = {}
+    for sp in SpeakingPart.objects.filter(exam_id__in=speaking_exam_ids):
+        if sp.has_content:
+            speaking_total[sp.exam_id] = speaking_total.get(sp.exam_id, 0) + 1
+    speaking_done = {}
+    for sr in SpeakingResponse.objects.filter(attempt__user=user, attempt__exam_id__in=speaking_exam_ids).values('attempt__exam_id'):
+        ex_id = sr['attempt__exam_id']
+        speaking_done[ex_id] = speaking_done.get(ex_id, 0) + 1
+    for ex_id in speaking_exam_ids:
+        done = speaking_done.get(ex_id, 0)
+        total = speaking_total.get(ex_id, 0)
+        if total and done >= total:
+            completed_speaking.add(ex_id)
+        elif done > 0:
+            in_progress_speaking.add(ex_id)
+
+    def bucket(total_set, completed_set, in_progress_set):
+        total_count = len(total_set)
+        completed_count = len(completed_set & total_set)
+        in_progress_count = len(in_progress_set & total_set)
+        not_started_count = max(0, total_count - completed_count - in_progress_count)
+        return {
+            'total': total_count,
+            'completed': completed_count,
+            'in_progress': in_progress_count,
+            'not_started': not_started_count,
+        }
+
+    skills_aggregate = {
+        'writing': bucket(writing_exam_ids, completed_writing, in_progress_writing),
+        'reading': bucket(reading_exam_ids, completed_reading, in_progress_reading),
+        'speaking': bucket(speaking_exam_ids, completed_speaking, in_progress_speaking),
+        'listening': {'total': 0, 'completed': 0, 'in_progress': 0, 'not_started': 0},
+    }
+    skills_completed_all = sum(s['completed'] for s in skills_aggregate.values())
+    skills_available_all = sum(s['total'] for s in skills_aggregate.values())
+    return skills_aggregate, skills_completed_all, skills_available_all
+
+
 def _streak_days_for_user(user):
     """Counts consecutive days (ending today) the user has submitted anything."""
     today = timezone.now().date()
@@ -790,7 +916,35 @@ def fet_dashboard(request):
     if not user.is_authenticated:
         return Response({'detail': 'Authentication required.'}, status=status.HTTP_401_UNAUTHORIZED)
 
-    summaries = _compute_exam_progress_for_user(user)
+    # Pagination is now applied at the QUERYSET level, before any
+    # summary computation. Without an `exams_page` param we fall back
+    # to the legacy full-list behaviour so older deploys keep working.
+    exams_page_param = request.query_params.get('exams_page')
+    exams_pagination = None
+    if exams_page_param is not None:
+        try:
+            page = max(1, int(exams_page_param))
+        except (TypeError, ValueError):
+            page = 1
+        try:
+            page_size = max(1, min(50, int(request.query_params.get('exams_page_size', 5))))
+        except (TypeError, ValueError):
+            page_size = 5
+        active_qs = Exam.objects.filter(is_active=True, is_deleted=False).order_by('-created_at')
+        total = active_qs.count()
+        page_qs = active_qs[(page - 1) * page_size : page * page_size]
+        summaries = _compute_exam_progress_for_user(user, exams_qs=page_qs)
+        exams_pagination = {
+            'count': total,
+            'page': page,
+            'page_size': page_size,
+            'total_pages': max(1, (total + page_size - 1) // page_size),
+            'has_next': page * page_size < total,
+            'has_prev': page > 1,
+        }
+    else:
+        summaries = _compute_exam_progress_for_user(user)
+
     in_progress = [s for s in summaries if s['status'] == 'in_progress']
     completed = [s for s in summaries if s['status'] == 'completed']
     not_started = [s for s in summaries if s['status'] == 'not_started']
@@ -931,63 +1085,11 @@ def fet_dashboard(request):
     first_name = name.split(' ')[0] if name else 'there'
     initials = ''.join([p[0] for p in name.split(' ') if p][:2]).upper() or first_name[:2].upper()
 
-    # Aggregate skill counts computed from the FULL set of summaries so
-    # the dashboard's skill cards stay accurate even when `all_exams` is
-    # paginated below. Counted at the (exam × skill) level — a single
-    # exam with both writing and reading content contributes 2 rows.
-    skills_aggregate = {
-        sk: {'total': 0, 'completed': 0, 'in_progress': 0, 'not_started': 0}
-        for sk in ('writing', 'reading', 'speaking', 'listening')
-    }
-    skills_completed_all = 0
-    skills_available_all = 0
-    for s in summaries:
-        for sk_key, sk in (s.get('skills') or {}).items():
-            if not sk or not sk.get('has_content'):
-                continue
-            if sk_key not in skills_aggregate:
-                continue
-            skills_aggregate[sk_key]['total'] += 1
-            status = sk.get('status') or 'not_started'
-            if status == 'completed':
-                skills_aggregate[sk_key]['completed'] += 1
-                skills_completed_all += 1
-            elif status == 'in_progress':
-                skills_aggregate[sk_key]['in_progress'] += 1
-            else:
-                skills_aggregate[sk_key]['not_started'] += 1
-            skills_available_all += 1
-
-    # Optional pagination for `all_exams`. When `exams_page` is in the
-    # query string we slice the list and add metadata so the frontend
-    # can render page N without holding the full library in memory.
-    # The aggregates above and the other top-level fields
-    # (continue_learning, average_score, skill_breakdown, etc.) are still
-    # computed from the full set, so stats remain accurate.
-    exams_page_param = request.query_params.get('exams_page')
-    exams_pagination = None
-    paged_summaries = summaries
-    if exams_page_param is not None:
-        try:
-            page = max(1, int(exams_page_param))
-        except (TypeError, ValueError):
-            page = 1
-        try:
-            page_size = max(1, min(50, int(request.query_params.get('exams_page_size', 5))))
-        except (TypeError, ValueError):
-            page_size = 5
-        total = len(summaries)
-        start = (page - 1) * page_size
-        end = start + page_size
-        paged_summaries = summaries[start:end]
-        exams_pagination = {
-            'count': total,
-            'page': page,
-            'page_size': page_size,
-            'total_pages': max(1, (total + page_size - 1) // page_size),
-            'has_next': end < total,
-            'has_prev': page > 1,
-        }
+    # Aggregate skill counts via the cheap helper — runs ~10 small
+    # COUNT/values queries instead of materialising a summary for every
+    # exam in the library. With this, the dashboard endpoint stays fast
+    # even when the catalogue has hundreds of exams.
+    skills_aggregate, skills_completed_all, skills_available_all = _compute_skills_aggregate_for_user(user)
 
     return Response({
         'user': {'name': name, 'first_name': first_name, 'initials': initials, 'email': user.email or ''},
@@ -1000,10 +1102,12 @@ def fet_dashboard(request):
         },
         'continue_learning': continue_learning,
         'next_up': next_up,
+        # When paginated we send empty status arrays — the frontend reads
+        # `skills_aggregate` for the cards and `all_exams` for the table.
         'in_progress': in_progress if exams_pagination is None else [],
         'completed': completed if exams_pagination is None else [],
         'not_started': not_started if exams_pagination is None else [],
-        'all_exams': paged_summaries,
+        'all_exams': summaries,
         'all_exams_pagination': exams_pagination,
         'skills_aggregate': skills_aggregate,
         'skills_completed_all': skills_completed_all,
