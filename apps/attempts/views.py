@@ -917,11 +917,18 @@ def fet_dashboard(request):
         return Response({'detail': 'Authentication required.'}, status=status.HTTP_401_UNAUTHORIZED)
 
     # Pagination is now applied at the QUERYSET level, before any
-    # summary computation. Without an `exams_page` param we fall back
-    # to the legacy full-list behaviour so older deploys keep working.
+    # summary computation. Optional `skill` filter restricts the
+    # query to exams with content for that skill, so the frontend's
+    # skill tabs (writing / reading / speaking) return the right
+    # exams per page instead of mixed pages that the client then
+    # has to filter (which broke the tab UX once pagination was in
+    # play). Without an `exams_page` param we fall back to the
+    # legacy full-list behaviour so older deploys keep working.
     exams_page_param = request.query_params.get('exams_page')
+    skill_filter = (request.query_params.get('skill') or '').strip().lower()
     exams_pagination = None
     if exams_page_param is not None:
+        from apps.exams.models import ReadingPart  # local import to avoid cycles
         try:
             page = max(1, int(exams_page_param))
         except (TypeError, ValueError):
@@ -931,6 +938,21 @@ def fet_dashboard(request):
         except (TypeError, ValueError):
             page_size = 5
         active_qs = Exam.objects.filter(is_active=True, is_deleted=False).order_by('-created_at')
+        if skill_filter == 'writing':
+            writing_ids = WritingQuestion.objects.values_list('exam_id', flat=True).distinct()
+            active_qs = active_qs.filter(id__in=writing_ids)
+        elif skill_filter == 'reading':
+            reading_ids = (
+                ReadingPart.objects.filter(has_content=True)
+                .values_list('exam_id', flat=True).distinct()
+            )
+            active_qs = active_qs.filter(id__in=reading_ids)
+        elif skill_filter == 'speaking':
+            speaking_ids = (
+                SpeakingPart.objects.filter(has_content=True)
+                .values_list('exam_id', flat=True).distinct()
+            )
+            active_qs = active_qs.filter(id__in=speaking_ids)
         total = active_qs.count()
         page_qs = active_qs[(page - 1) * page_size : page * page_size]
         summaries = _compute_exam_progress_for_user(user, exams_qs=page_qs)
@@ -941,6 +963,7 @@ def fet_dashboard(request):
             'total_pages': max(1, (total + page_size - 1) // page_size),
             'has_next': page * page_size < total,
             'has_prev': page > 1,
+            'skill': skill_filter or 'all',
         }
     else:
         summaries = _compute_exam_progress_for_user(user)
