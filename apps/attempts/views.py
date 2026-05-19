@@ -926,9 +926,11 @@ def fet_dashboard(request):
     # legacy full-list behaviour so older deploys keep working.
     exams_page_param = request.query_params.get('exams_page')
     skill_filter = (request.query_params.get('skill') or '').strip().lower()
+    slim_mode = (request.query_params.get('slim') or '').lower() in ('1', 'true', 'yes')
     exams_pagination = None
     if exams_page_param is not None:
         from apps.exams.models import ReadingPart  # local import to avoid cycles
+        from django.db.models.functions import Length
         try:
             page = max(1, int(exams_page_param))
         except (TypeError, ValueError):
@@ -937,7 +939,16 @@ def fet_dashboard(request):
             page_size = max(1, min(50, int(request.query_params.get('exams_page_size', 5))))
         except (TypeError, ValueError):
             page_size = 5
-        active_qs = Exam.objects.filter(is_active=True, is_deleted=False).order_by('-created_at')
+        # Natural-numeric sort: order by title length first, then by title
+        # alphabetically. For names like "FET Writing 1", "FET Writing 2",
+        # …, "FET Writing 10" this gives the intuitive order (shorter
+        # titles win the first comparison, so "1" lands before "10"). Plain
+        # `order_by('title')` would give 1, 10, 11, …, 2 which is the
+        # bug the client just hit again after we moved sort to the server.
+        active_qs = (
+            Exam.objects.filter(is_active=True, is_deleted=False)
+            .order_by(Length('title'), 'title')
+        )
         if skill_filter == 'writing':
             writing_ids = WritingQuestion.objects.values_list('exam_id', flat=True).distinct()
             active_qs = active_qs.filter(id__in=writing_ids)
@@ -967,6 +978,18 @@ def fet_dashboard(request):
         }
     else:
         summaries = _compute_exam_progress_for_user(user)
+
+    # Slim mode: the frontend has already received the heavy stats
+    # (streak, score samples, weekly activity, skills_aggregate, etc.)
+    # from the initial dashboard load and is only paginating now. Skip
+    # all of the per-user aggregates and return just the exam slice so
+    # page clicks feel instant. Anything depending on those stats keeps
+    # using the values it cached from the initial load.
+    if slim_mode and exams_pagination is not None:
+        return Response({
+            'all_exams': summaries,
+            'all_exams_pagination': exams_pagination,
+        })
 
     in_progress = [s for s in summaries if s['status'] == 'in_progress']
     completed = [s for s in summaries if s['status'] == 'completed']
